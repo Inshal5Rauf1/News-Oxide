@@ -117,6 +117,14 @@ def test_normalise_keeps_urlless_rows(capsys):
     assert capsys.readouterr().err.count("row without url kept") == 3
 
 
+def test_urlless_same_title_gets_distinct_ids():
+    row = {"title": "Same", "url": "", "feed": "F", "published": ""}
+    items = curate.normalise({"feeds": [row, dict(row), dict(row)]})
+    ids = [i["id"] for i in items]
+    assert len(items) == 3 and len(set(ids)) == 3
+    assert ids[1].endswith("-2") and ids[2].endswith("-3")
+
+
 def test_urlless_trending_row_ok():
     day = {"trending": {"daily": [{"full_name": "a/b", "url": None, "stars": 1, "stars_gained": 1}]}}
     assert len(curate.normalise(day)) == 1

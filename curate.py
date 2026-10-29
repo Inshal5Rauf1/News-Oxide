@@ -135,6 +135,10 @@ def normalise(day):
                       file=sys.stderr)
                 iid = item_id_for_text(key, r["title"] or "")
                 slot = (iid, len(items))         # never merged with anything
+                taken = {i["id"] for i in items.values()}
+                base, n = iid, 2
+                while iid in taken:
+                    iid, n = "%s-%d" % (base, n), n + 1
                 url = r["hn_url"] or ""
             it = items.get(slot)
             if it is None:

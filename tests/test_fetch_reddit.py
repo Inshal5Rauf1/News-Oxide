@@ -1,4 +1,5 @@
 import json
+import urllib.error
 from html import escape
 
 import pytest
@@ -26,8 +27,21 @@ def _feed(entries):
             + "".join(entries) + "</feed>")
 
 
+def _429():
+    return urllib.error.HTTPError("https://www.reddit.com/", 429, "Too Many Requests", None, None)
+
+
+@pytest.fixture(autouse=True)
+def sleeps(monkeypatch):
+    """Record every time.sleep call instead of sleeping, so pacing costs nothing in tests."""
+    calls = []
+    monkeypatch.setattr(fetch_sources.time, "sleep", calls.append)
+    return calls
+
+
 def _setup(monkeypatch, tmp_path, subs, pages):
-    """pages: {sub: feed XML str or Exception}. subs go into a fake subreddits.txt."""
+    """pages: {sub: feed XML str, Exception, or a list of those consumed one per request}.
+    subs go into a fake subreddits.txt."""
     txt = tmp_path / "subreddits.txt"
     txt.write_text("\n".join(subs) + "\n")
     monkeypatch.setattr(fetch_sources, "SUBREDDITS_TXT", str(txt))
@@ -37,6 +51,8 @@ def _setup(monkeypatch, tmp_path, subs, pages):
         seen_headers.append((url, headers))
         sub = url.split("/r/")[1].split("/")[0]
         page = pages[sub]
+        if isinstance(page, list):
+            page = page.pop(0)
         if isinstance(page, Exception):
             raise page
         return page
@@ -101,3 +117,31 @@ def test_reddit_dedups_crossposts_first_sub_wins(monkeypatch, tmp_path, capsys):
     fetch_sources.reddit()
     out = json.loads(capsys.readouterr().out)
     assert [(r["title"], r["subreddit"]) for r in out] == [("from a", "a")]
+
+
+def test_reddit_429_retries_once_after_pause(monkeypatch, tmp_path, capsys, sleeps):
+    good = _feed([_entry("ok", PERMA.format(sub="x", id="1", slug="ok"))])
+    seen = _setup(monkeypatch, tmp_path, ["x"], {"x": [_429(), good]})
+    fetch_sources.reddit()
+    out = json.loads(capsys.readouterr().out)
+    assert [r["title"] for r in out] == ["ok"]
+    assert len(seen) == 2
+    assert sleeps == [fetch_sources.REDDIT_PAUSE * 4]
+
+
+def test_reddit_second_429_is_that_sub_failing(monkeypatch, tmp_path, capsys, sleeps):
+    good = _feed([_entry("ok", PERMA.format(sub="b", id="1", slug="ok"))])
+    seen = _setup(monkeypatch, tmp_path, ["a", "b"], {"a": [_429(), _429()], "b": good})
+    fetch_sources.reddit()
+    cap = capsys.readouterr()
+    assert [r["title"] for r in json.loads(cap.out)] == ["ok"]
+    assert cap.err.splitlines() == ["reddit: r/a failed: HTTP Error 429: Too Many Requests"]
+    assert len(seen) == 3
+    assert sleeps == [fetch_sources.REDDIT_PAUSE * 4, fetch_sources.REDDIT_PAUSE]
+
+
+def test_reddit_paces_between_subs_not_before_first(monkeypatch, tmp_path, capsys, sleeps):
+    good = _feed([_entry("t", PERMA.format(sub="x", id="1", slug="t"))])
+    _setup(monkeypatch, tmp_path, ["a", "b", "c"], {"a": good, "b": good, "c": good})
+    fetch_sources.reddit()
+    assert sleeps == [fetch_sources.REDDIT_PAUSE, fetch_sources.REDDIT_PAUSE]

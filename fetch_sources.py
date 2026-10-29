@@ -6,10 +6,18 @@ fetch_sources.py: deterministic snapshot sources (no API keys, no LLM).
   hackernews   top front-page stories (HN Algolia API)
   newrepos     GitHub repos created in the last 7 days with >=100 stars
   hnbest       top HN stories from the last 24h, by points
+  feeds        curated RSS/Atom feeds from feeds.opml (last 26h, plus unseen undated items)
 Each prints a JSON snapshot to stdout; render_email.py renders it as-is.
 """
-import sys, json, os, re, time, urllib.parse, urllib.request
+import sys, gzip, io, json, os, re, time, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
+
+import feedparse
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+FEEDS_OPML = os.path.join(_HERE, "feeds.opml")
+STATE_DIR = os.path.join(_HERE, "state")
+TMP_DIR = os.path.join(_HERE, "tmp")
 
 UA = {"User-Agent": "Mozilla/5.0 (daily-brief research script)"}
 MAX_BYTES = 8 * 1024 * 1024            # cap response size as a blowup defense
@@ -21,7 +29,10 @@ def get(url, headers=None):
         h.update(headers)
     req = urllib.request.Request(url, headers=h)
     with urllib.request.urlopen(req, timeout=40) as r:
-        return r.read(MAX_BYTES).decode("utf-8", "replace")
+        raw = r.read(MAX_BYTES)
+    if raw[:2] == b"\x1f\x8b":        # some servers gzip even without Accept-Encoding
+        raw = gzip.GzipFile(fileobj=io.BytesIO(raw)).read(MAX_BYTES)
+    return raw.decode("utf-8", "replace")
 
 
 def _unescape_rsc(html):
@@ -185,11 +196,55 @@ def hnbest():
     print(json.dumps(out))
 
 
+def feeds():
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=26)
+    try:
+        with open(os.path.join(STATE_DIR, "feeds_seen.json")) as f:
+            seen = json.load(f)
+    except (OSError, ValueError):
+        seen = {}
+    state = dict(seen)
+    out, urls, failed = [], set(), 0
+    sources = feedparse.read_opml(FEEDS_OPML)
+    for src in sources:
+        try:
+            items = feedparse.parse_feed(get(src["xmlUrl"]))
+            if not items:
+                raise ValueError("no items parsed")
+        except Exception as e:
+            failed += 1
+            print(f"feeds: {src['title']} failed: {e}", file=sys.stderr)
+            continue
+        for it in items:
+            url = it["url"]
+            if not url or url in urls:
+                continue
+            when = feedparse.parse_date(it["published"])
+            if when is not None:
+                keep = when >= cutoff
+            else:
+                keep = url not in seen
+                state.setdefault(url, now.date().isoformat())
+            if keep:
+                urls.add(url)
+                out.append({"title": it["title"], "url": url, "feed": src["title"],
+                            "published": it["published"], "summary": it["summary"]})
+    keep_after = (now - timedelta(days=30)).date().isoformat()
+    state = {u: d for u, d in state.items() if d >= keep_after}
+    os.makedirs(TMP_DIR, exist_ok=True)
+    with open(os.path.join(TMP_DIR, "feeds.state.json"), "w") as f:
+        json.dump(state, f)
+    print(json.dumps(out))
+    if sources and failed == len(sources):
+        raise SystemExit(3)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     dispatch = {"trending": trending, "huggingface": huggingface, "hackernews": hackernews,
-                "newrepos": newrepos, "hnbest": hnbest}
+                "newrepos": newrepos, "hnbest": hnbest, "feeds": feeds}
     if cmd in dispatch:
         dispatch[cmd]()
     else:
-        sys.exit("usage: fetch_sources.py trending|huggingface|hackernews|newrepos|hnbest")
+        sys.exit("usage: fetch_sources.py trending|huggingface|hackernews|newrepos|hnbest|feeds")

@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 """
-fetch_sources.py — deterministic snapshot sources (no API keys, no LLM).
+fetch_sources.py: deterministic snapshot sources (no API keys, no LLM).
   trending     GitHub trending repos (Trendshift mirror: daily/weekly/monthly/yearly)
   huggingface  trending models / datasets / spaces + daily papers (HF API)
   hackernews   top front-page stories (HN Algolia API)
+  newrepos     GitHub repos created in the last 7 days with >=100 stars
+  hnbest       top HN stories from the last 24h, by points
 Each prints a JSON snapshot to stdout; render_email.py renders it as-is.
 """
-import sys, json, re, urllib.request
+import sys, json, os, re, time, urllib.parse, urllib.request
+from datetime import datetime, timedelta, timezone
 
 UA = {"User-Agent": "Mozilla/5.0 (daily-brief research script)"}
 MAX_BYTES = 8 * 1024 * 1024            # cap response size as a blowup defense
 
 
-def get(url):
-    req = urllib.request.Request(url, headers=UA)
+def get(url, headers=None):
+    h = dict(UA)
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, headers=h)
     with urllib.request.urlopen(req, timeout=40) as r:
         return r.read(MAX_BYTES).decode("utf-8", "replace")
 
@@ -145,10 +151,46 @@ def hackernews():
     print(json.dumps(out))
 
 
+def newrepos():
+    out = []
+    try:
+        since = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
+        q = urllib.parse.quote(f"created:>={since} stars:>=100", safe="")
+        url = f"https://api.github.com/search/repositories?q={q}&sort=stars&order=desc&per_page=100"
+        token = os.environ.get("GITHUB_TOKEN")
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        for r in json.loads(get(url, headers=headers)).get("items", [])[:100]:
+            out.append({"full_name": r.get("full_name"), "url": r.get("html_url"),
+                        "description": r.get("description") or "", "language": r.get("language") or "",
+                        "stars": r.get("stargazers_count"), "created_at": r.get("created_at")})
+    except Exception:
+        out = []   # empty on failure so the section is skipped, not sent as an empty list
+    print(json.dumps(out))
+
+
+def hnbest():
+    out = []
+    try:
+        epoch = int(time.time()) - 86400
+        url = f"https://hn.algolia.com/api/v1/search?tags=story&numericFilters=created_at_i>{epoch}&hitsPerPage=50"
+        hits = json.loads(get(url)).get("hits", [])
+        hits.sort(key=lambda h: h.get("points") or 0, reverse=True)
+        for h in hits:
+            oid = h.get("objectID", "")
+            out.append({"title": h.get("title"),
+                        "url": h.get("url") or f"https://news.ycombinator.com/item?id={oid}",
+                        "points": h.get("points"), "comments": h.get("num_comments"),
+                        "hn_url": f"https://news.ycombinator.com/item?id={oid}", "author": h.get("author")})
+    except Exception:
+        out = []
+    print(json.dumps(out))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    dispatch = {"trending": trending, "huggingface": huggingface, "hackernews": hackernews}
+    dispatch = {"trending": trending, "huggingface": huggingface, "hackernews": hackernews,
+                "newrepos": newrepos, "hnbest": hnbest}
     if cmd in dispatch:
         dispatch[cmd]()
     else:
-        sys.exit("usage: fetch_sources.py trending|huggingface|hackernews")
+        sys.exit("usage: fetch_sources.py trending|huggingface|hackernews|newrepos|hnbest")

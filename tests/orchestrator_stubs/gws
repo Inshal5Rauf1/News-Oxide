@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
 # Stub gws: log the subject of the uploaded eml (first line written by the eml stub).
-for ((i=1; i<=$#; i++)); do [ "${!i}" = "--upload" ] && { j=$((i+1)); head -1 "${!j}" >> "$GWS_LOG"; }; done
+# GWS_FAIL=1 fails every send; any other value fails sends whose subject contains it.
+for ((i=1; i<=$#; i++)); do [ "${!i}" = "--upload" ] && { j=$((i+1)); line="$(head -1 "${!j}")"; }; done
+if [ -n "${GWS_FAIL:-}" ] && { [ "$GWS_FAIL" = 1 ] || [[ "$line" == *"$GWS_FAIL"* ]]; }; then echo "stub: send failed" >&2; exit 1; fi
+echo "$line" >> "$GWS_LOG"
 exit 0

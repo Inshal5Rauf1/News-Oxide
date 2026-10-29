@@ -15,7 +15,7 @@ setup(){
   W="$(mktemp -d)"; WS="$WS $W"; cp "$REPO/daily_brief.sh" "$W/"; cp "$HERE"/orchestrator_stubs/*.py "$W/"
   printf 'RECIPIENTS=a@example.org\nHEALTH_TO=h@example.org\nFROM_ADDR=f@example.org\n' > "$W/config.env"
   export GWS="$HERE/orchestrator_stubs/gws" GWS_LOG="$W/gws.log"; : > "$GWS_LOG"
-  unset FAIL_KEYS CURATE_EXIT CURATE_DEGRADED RELEASES_ITEMS
+  unset FAIL_KEYS GARBAGE_KEYS COMMIT_FAIL CURATE_EXIT CURATE_DEGRADED RELEASES_ITEMS RENDER_FAIL GWS_FAIL
 }
 G(){ echo "$W/guard/$D"; }
 
@@ -45,13 +45,14 @@ check "--only=curate sends one more curated" '[ "$(count "· Curated ·")" = 2 ]
 bash "$W/daily_brief.sh" --only=trending
 check "--only=trending does not run curate" '[ "$(count "· Curated ·")" = 2 ] && [ "$(count "· GitHub Trending ·")" = 2 ]'
 
-echo "## scenario 2: feeds fails (exit 3)"
-setup; export FAIL_KEYS=feeds
+echo "## scenario 2: feeds fails (exit 3), hnbest prints non-JSON"
+setup; export FAIL_KEYS=feeds GARBAGE_KEYS=hnbest
 bash "$W/daily_brief.sh"
 check "health names feeds(error)" 'grep "· ⚠ health ·" "$GWS_LOG" | grep -q . && grep -q "feeds(error)" "$W/tmp/health.html"'
 check "health goes to HEALTH_TO" 'grep "· ⚠ health ·" "$GWS_LOG" | grep -q "h@example.org"'
 check "curated still sent" '[ "$(count "· Curated ·")" = 1 ]'
 check "feeds not done" '[ ! -f "$(G)/feeds.done" ]'
+check "non-JSON fetch is hnbest(error), not done" 'grep -q "hnbest(error)" "$W/tmp/health.html" && [ ! -f "$(G)/hnbest.done" ]'
 
 echo "## scenario 3: curate exit 2 still sends, flags curate(error)"
 setup; export CURATE_EXIT=2
@@ -72,7 +73,47 @@ check "curated subject says ungrouped" 'grep "· Curated ·" "$GWS_LOG" | grep -
 check "health names probe(failed)" 'grep -q "probe(failed)" "$W/tmp/health.html"'
 check "curate itself not flagged" '! grep -q "curate(error)" "$W/tmp/health.html"'
 
-echo "## scenario 6: --dry-run"
+echo "## scenario 6: curated render fails"
+setup; export RENDER_FAIL=curated
+bash "$W/daily_brief.sh"
+check "no curated send" '[ "$(count "· Curated ·")" = 0 ] && [ "$(count "· GitHub Trending ·")" = 1 ]'
+check "no curate.done, no feeds commit" '[ ! -f "$(G)/curate.done" ] && [ ! -f "$W/tmp/committed-feeds" ]'
+check "health names curate(error)" 'grep "· ⚠ health ·" "$GWS_LOG" | grep -q . && grep -q "curate(error)" "$W/tmp/health.html"'
+
+echo "## scenario 7: eml build fails, stale emls from an earlier day are present"
+setup; export RENDER_FAIL=eml; mkdir -p "$W/tmp"
+for k in trending huggingface hackernews curate health; do echo "eml STALE $k" > "$W/tmp/$k.eml"; done
+bash "$W/daily_brief.sh"
+check "nothing sent (no stale eml uploaded)" '[ ! -s "$GWS_LOG" ]'
+check "no .done for raw or curate" '[ ! -f "$(G)/trending.done" ] && [ ! -f "$(G)/curate.done" ] && [ ! -f "$W/tmp/committed-feeds" ]'
+check "health lists trending(error) and curate(error)" 'grep -q "trending(error)" "$W/tmp/health.html" && grep -q "curate(error)" "$W/tmp/health.html"'
+
+echo "## scenario 8: curated send fails"
+setup; export GWS_FAIL="· Curated ·"
+bash "$W/daily_brief.sh"
+check "raw sent, curated not" '[ "$(count "· GitHub Trending ·")" = 1 ] && [ "$(count "· Curated ·")" = 0 ]'
+check "no curate.done, no feeds commit" '[ ! -f "$(G)/curate.done" ] && [ ! -f "$W/tmp/committed-feeds" ]'
+check "health sent naming curate(error)" 'grep -q "· ⚠ health ·" "$GWS_LOG" && grep -q "curate(error)" "$W/tmp/health.html"'
+setup; export GWS_FAIL=1
+bash "$W/daily_brief.sh"
+check "GWS_FAIL=1: nothing done" '[ -z "$(ls "$(G)" | grep -v -e newrepos -e hnbest -e feeds -e reddit -e releases)" ] && [ ! -f "$W/tmp/committed-feeds" ]'
+check "GWS_FAIL=1: health.html names curate(error)" 'grep -q "curate(error)" "$W/tmp/health.html"'
+
+echo "## scenario 9: commit-state fails"
+setup; export COMMIT_FAIL=1
+bash "$W/daily_brief.sh"
+check "health names feeds/releases(commit-failed)" 'grep -q "feeds(commit-failed)" "$W/tmp/health.html" && grep -q "releases(commit-failed)" "$W/tmp/health.html"'
+check "commit failure logged" 'grep -q "feeds: commit-state FAILED" "$W/cron.log"'
+
+echo "## scenario 10: every source fails"
+setup; export FAIL_KEYS=trending,huggingface,hackernews,newrepos,hnbest,feeds,reddit
+bash "$W/daily_brief.sh"
+check "no curated email" '[ "$(count "· Curated ·")" = 0 ] && [ ! -f "$(G)/curate.done" ]'
+check "logs nothing to curate" 'grep -q "curate: nothing to curate" "$W/cron.log"'
+check "health lists the topics, not curate" 'grep -q "reddit(error)" "$W/tmp/health.html" && ! grep -q "curate(" "$W/tmp/health.html"'
+check "only the health email went out" '[ "$(wc -l < "$GWS_LOG")" = 1 ]'
+
+echo "## scenario 11: --dry-run"
 setup; export RELEASES_ITEMS=1
 bash "$W/daily_brief.sh" --dry-run
 check "dry-run sends nothing" '[ ! -s "$GWS_LOG" ]'

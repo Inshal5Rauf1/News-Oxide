@@ -50,6 +50,10 @@ mark_done(){ [ "$DRYRUN" -eq 1 ] || : > "$GUARDDIR/$1.done"; }
 status(){ echo "$2" > "$TMP/$1.status"; }
 # run <key>: selected and not done today. A guard skip writes status "done" so it is not "missing".
 run(){ should "$1" || return 1; if [ -z "$ONLY" ] && topic_done "$1"; then log "$1: already done today, skipping"; status "$1" done; return 1; fi; }
+# commit_state <key>: promote pending state; a failure is logged and flagged for the health alert.
+commit_state(){ "$PY" "$DIR/fetch_sources.py" commit-state "$1" 2>>"$LOG" || { log "$1: commit-state FAILED"; : > "$TMP/$1.commitfail"; }; }
+# build_eml <subject> <html> <to> <eml> [attach]: removes any old eml first, so a failed build never sends a stale one.
+build_eml(){ rm -f "$4"; "$PY" "$DIR/render_email.py" eml "$@" && [ -s "$4" ]; }
 send(){ "$GWS" gmail users messages send --params '{"userId":"me"}' --upload "$1" --upload-content-type message/rfc822 >>"$LOG" 2>&1; }
 
 log(){ echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] $*" >> "$LOG"; }
@@ -77,14 +81,16 @@ fetch_topic(){
   SJ="$TMP/${key}_data.json"; rm -f "$TMP/$key.state.json"   # pending state must be from this fetch
   timeout "$t" "$PY" "$DIR/fetch_sources.py" "$key" > "$SJ" 2>>"$LOG" \
     || { log "$key: fetch failed (exit $?)"; status "$key" error; return 1; }
-  TOTAL=$("$PY" -c "import json,sys;d=json.load(open(sys.argv[1]));print(sum(len(v) for v in d.values()) if isinstance(d,dict) else len(d))" "$SJ" 2>/dev/null || echo 0)
+  TOTAL=$("$PY" -c "import json,sys;d=json.load(open(sys.argv[1]));print(sum(len(v) for v in d.values()) if isinstance(d,dict) else len(d))" "$SJ" 2>>"$LOG") \
+    || { log "$key: fetch output is not JSON"; status "$key" error; return 1; }
   log "$key: fetched $TOTAL items"
 }
 
 # render_send <key> <html>: eml + send. Status sent (and mark_done) or error.
 render_send(){
   local key="$1" html="$2" eml="$TMP/$1.eml"
-  "$PY" "$DIR/render_email.py" eml "Daily Brief · ${LABELS[$key]} · $SUBJ_DATE" "$html" "$RECIPIENTS" "$eml"
+  build_eml "Daily Brief · ${LABELS[$key]} · $SUBJ_DATE" "$html" "$RECIPIENTS" "$eml" \
+    || { status "$key" error; log "$key: ERROR building eml"; return 1; }
   if send "$eml"; then status "$key" sent; mark_done "$key"; log "$key: SENT $TOTAL items to $RECIPIENTS"
   else status "$key" error; log "$key: ERROR sending"; return 1; fi
 }
@@ -95,7 +101,8 @@ process_snapshot(){
   fetch_topic "$key" || return
   if [ "$TOTAL" -eq 0 ]; then status "$key" empty; return; fi
   local shtml="$SENT/$TODAY-$key.html"; cp "$SJ" "$SENT/$TODAY-$key.json"
-  "$PY" "$DIR/render_email.py" "$key" "$SJ" "$TODAY" "$shtml"
+  "$PY" "$DIR/render_email.py" "$key" "$SJ" "$TODAY" "$shtml" \
+    || { log "$key: render failed"; status "$key" error; return 1; }
   if [ "$DRYRUN" -eq 1 ]; then log "$key: DRY-RUN rendered $shtml ($TOTAL items)"; status "$key" produced; return; fi
   render_send "$key" "$shtml"
 }
@@ -116,13 +123,14 @@ process_releases(){
   if [ "$TOTAL" -eq 0 ]; then
     status "$key" empty; mark_done "$key"
     # Empty is final (first run seeds state silently); nothing to re-announce, so commit.
-    [ "$DRYRUN" -eq 0 ] && "$PY" "$DIR/fetch_sources.py" commit-state releases 2>>"$LOG"
+    [ "$DRYRUN" -eq 0 ] && commit_state releases
     return
   fi
   local shtml="$SENT/$TODAY-$key.html"; cp "$SJ" "$SENT/$TODAY-$key.json"
-  "$PY" "$DIR/render_email.py" "$key" "$SJ" "$TODAY" "$shtml"
+  "$PY" "$DIR/render_email.py" "$key" "$SJ" "$TODAY" "$shtml" \
+    || { log "$key: render failed"; status "$key" error; return 1; }
   if [ "$DRYRUN" -eq 1 ]; then log "$key: DRY-RUN rendered $shtml ($TOTAL items)"; status "$key" produced; return; fi
-  render_send "$key" "$shtml" && "$PY" "$DIR/fetch_sources.py" commit-state releases 2>>"$LOG"
+  render_send "$key" "$shtml" && commit_state releases
 }
 
 # Curate stage (foreground, after all fetches). Writes $TMP/curate.status and $TMP/probe.status.
@@ -135,25 +143,28 @@ process_curate(){
   local rc=$?
   if [ "$rc" -eq 2 ] && [ -f "$cj" ]; then log "curate: invariant failure (exit 2), sending anyway"; status curate error
   elif [ "$rc" -ne 0 ] || [ ! -f "$cj" ]; then log "curate: FAILED (exit $rc), no curated email"; status curate error; return; fi
-  local flags; flags=$("$PY" -c "import json,sys;s=json.load(open(sys.argv[1]))['stats'];print(int(bool(s.get('grouped'))), {None:'skipped',True:'ok',False:'failed'}[s.get('probe_ok')])" "$cj" 2>>"$LOG") \
+  local flags; flags=$("$PY" -c "import json,sys;s=json.load(open(sys.argv[1]))['stats'];print(s.get('items_in', 0), int(bool(s.get('grouped'))), {None:'skipped',True:'ok',False:'failed'}[s.get('probe_ok')])" "$cj" 2>>"$LOG") \
     || { log "curate: unreadable stats in $cj"; status curate error; return; }
-  local grouped="${flags% *}"; status probe "${flags#* }"
+  local n grouped probe; read -r n grouped probe <<< "$flags"; status probe "$probe"
+  if [ "$n" -eq 0 ]; then log "curate: nothing to curate (no source produced items), no curated email"; status curate empty; return; fi
   "$PY" "$DIR/render_email.py" curated "$cj" "$TODAY" "$body" "$full" \
     || { log "curate: render failed"; status curate error; return; }
   if [ "$DRYRUN" -eq 1 ]; then log "curate: DRY-RUN rendered $full (grouped=$grouped)"; [ -f "$TMP/curate.status" ] || status curate produced; return; fi
   local att="$TMP/curated-$TODAY.html" subj="Daily Brief · Curated · $SUBJ_DATE"
-  cp "$full" "$att"; [ "$grouped" = 1 ] || subj="$subj · ungrouped"
-  "$PY" "$DIR/render_email.py" eml "$subj" "$body" "$RECIPIENTS" "$TMP/curate.eml" "$att"
+  [ "$grouped" = 1 ] || subj="$subj · ungrouped"
+  rm -f "$att"
+  { cp "$full" "$att" && build_eml "$subj" "$body" "$RECIPIENTS" "$TMP/curate.eml" "$att"; } \
+    || { log "curate: ERROR building eml"; status curate error; return; }
   if send "$TMP/curate.eml"; then
     [ -f "$TMP/curate.status" ] || status curate sent
-    mark_done curate; "$PY" "$DIR/fetch_sources.py" commit-state feeds 2>>"$LOG"; log "curate: SENT to $RECIPIENTS"
+    mark_done curate; commit_state feeds; log "curate: SENT to $RECIPIENTS"
   else status curate error; log "curate: ERROR sending"; fi
 }
 
 # --- Main -------------------------------------------------------------------
 log "########## Daily brief: $TODAY (dryrun=$DRYRUN) ##########"
 [ -n "$ONLY" ] && log "Partial run, only: $ONLY (guard bypassed)"
-rm -f "$TMP"/*.status 2>/dev/null
+rm -f "$TMP"/*.status "$TMP"/*.commitfail 2>/dev/null
 
 wait_for_network
 
@@ -178,8 +189,8 @@ if [ "$PRODUCED" -eq 0 ] && [ "$ERRORED" -eq 0 ] && [ -z "$ONLY" ]; then
   log "All topics genuinely empty: heartbeat."
   hb="$SENT/$TODAY-heartbeat.html"; "$PY" "$DIR/render_email.py" heartbeat "$TODAY" "$hb"
   if [ "$DRYRUN" -eq 0 ]; then
-    "$PY" "$DIR/render_email.py" eml "Daily Brief · nothing today · $SUBJ_DATE" "$hb" "$RECIPIENTS" "$TMP/heartbeat.eml"
-    send "$TMP/heartbeat.eml" && log "heartbeat: SENT" || log "heartbeat: ERROR sending"
+    build_eml "Daily Brief · nothing today · $SUBJ_DATE" "$hb" "$RECIPIENTS" "$TMP/heartbeat.eml" \
+      && send "$TMP/heartbeat.eml" && log "heartbeat: SENT" || log "heartbeat: ERROR sending"
   else log "heartbeat: DRY-RUN, not sending."; fi
 fi
 
@@ -191,10 +202,11 @@ for key in $TOPIC_KEYS; do
 done
 [ "$(cat "$TMP/curate.status" 2>/dev/null)" = error ] && BAD="$BAD curate(error)"
 [ "$(cat "$TMP/probe.status" 2>/dev/null)" = failed ] && BAD="$BAD probe(failed)"
+for f in "$TMP"/*.commitfail; do [ -e "$f" ] && k="${f##*/}" && BAD="$BAD ${k%.commitfail}(commit-failed)"; done
 [ -n "$BAD" ] && log "health: needs attention:$BAD"
 if [ "$DRYRUN" -eq 0 ] && [ -z "$ONLY" ] && [ -n "$BAD" ]; then
   printf '<pre style="font-family:monospace;font-size:14px;color:#c9d1d9;background:#0d1117;padding:16px">Daily Brief health: %s\n\nNeeds attention:%s\n\nSee %s/cron.log for detail.</pre>' "$TODAY" "$BAD" "$DIR" > "$TMP/health.html"
-  "$PY" "$DIR/render_email.py" eml "Daily Brief · ⚠ health · $SUBJ_DATE" "$TMP/health.html" "${HEALTH_TO:-$RECIPIENTS}" "$TMP/health.eml"
-  send "$TMP/health.eml" && log "health: alerted:$BAD" || log "health: alert send failed"
+  build_eml "Daily Brief · ⚠ health · $SUBJ_DATE" "$TMP/health.html" "${HEALTH_TO:-$RECIPIENTS}" "$TMP/health.eml" \
+    && send "$TMP/health.eml" && log "health: alerted:$BAD" || log "health: alert send failed"
 fi
 log "########## Run complete (produced=$PRODUCED, dryrun=$DRYRUN) ##########"

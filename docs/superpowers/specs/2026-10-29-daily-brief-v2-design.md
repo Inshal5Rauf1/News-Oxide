@@ -1,6 +1,6 @@
 # Daily Brief v2: curated brief on top of the raw snapshots
 
-Date: 2026-10-29. Status: design, builder-checked, awaiting owner approval.
+Date: 2026-10-29. Status: implemented 2026-10-30 on branch v2-curated (see docs/OPERATIONS.md).
 
 ## Intent
 

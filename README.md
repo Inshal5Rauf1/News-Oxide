@@ -6,5 +6,6 @@ sends raw snapshot emails and one curated email that groups the day into
 themes. Nothing is ever dropped; the model only groups and summarises.
 
 Design: `docs/superpowers/specs/2026-10-29-daily-brief-v2-design.md`.
+How to run, edit sources, and read the logs: `docs/OPERATIONS.md`.
 Runs from a systemd user timer at 12:00 PKT. Model calls go through the
 Claude Code CLI (`claude -p`), no API key.

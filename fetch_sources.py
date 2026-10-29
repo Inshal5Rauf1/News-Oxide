@@ -7,6 +7,7 @@ fetch_sources.py: deterministic snapshot sources (no API keys, no LLM).
   newrepos     GitHub repos created in the last 7 days with >=100 stars
   hnbest       top HN stories from the last 24h, by points
   feeds        curated RSS/Atom feeds from feeds.opml (last 26h, plus unseen undated items)
+  reddit       hot posts from subreddits.txt (stickied posts skipped)
 Each prints a JSON snapshot to stdout; render_email.py renders it as-is.
 """
 import sys, gzip, io, json, os, re, time, urllib.parse, urllib.request
@@ -18,6 +19,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 FEEDS_OPML = os.path.join(_HERE, "feeds.opml")
 STATE_DIR = os.path.join(_HERE, "state")
 TMP_DIR = os.path.join(_HERE, "tmp")
+SUBREDDITS_TXT = os.path.join(_HERE, "subreddits.txt")
+REDDIT_UA = "news-oxide/1.0 (personal daily brief; by u/inshal)"
 
 UA = {"User-Agent": "Mozilla/5.0 (daily-brief research script)"}
 MAX_BYTES = 8 * 1024 * 1024            # cap response size as a blowup defense
@@ -240,11 +243,41 @@ def feeds():
         raise SystemExit(3)
 
 
+def reddit():
+    with open(SUBREDDITS_TXT, encoding="utf-8") as f:
+        subs = [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
+    out, urls, failed = [], set(), 0
+    for sub in subs:
+        try:
+            url = f"https://www.reddit.com/r/{sub}/hot.json?limit=25"
+            children = json.loads(get(url, headers={"User-Agent": REDDIT_UA}))["data"]["children"]
+        except Exception as e:
+            failed += 1
+            print(f"reddit: r/{sub} failed: {' '.join(str(e).split())}", file=sys.stderr)
+            continue
+        for c in children:
+            d = c["data"]
+            if d.get("stickied"):
+                continue
+            permalink = "https://www.reddit.com" + d["permalink"]
+            link = permalink if d.get("is_self") else (d.get("url") or permalink)
+            if link in urls:          # crosspost: first subreddit wins
+                continue
+            urls.add(link)
+            out.append({"title": d.get("title"), "url": link, "subreddit": sub,
+                        "score": d.get("score"), "comments": d.get("num_comments"),
+                        "permalink": permalink})
+    print(json.dumps(out))
+    if subs and failed == len(subs):
+        raise SystemExit(3)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     dispatch = {"trending": trending, "huggingface": huggingface, "hackernews": hackernews,
-                "newrepos": newrepos, "hnbest": hnbest, "feeds": feeds}
+                "newrepos": newrepos, "hnbest": hnbest, "feeds": feeds,
+                "reddit": reddit}
     if cmd in dispatch:
         dispatch[cmd]()
     else:
-        sys.exit("usage: fetch_sources.py trending|huggingface|hackernews|newrepos|hnbest|feeds")
+        sys.exit("usage: fetch_sources.py trending|huggingface|hackernews|newrepos|hnbest|feeds|reddit")

@@ -23,7 +23,7 @@ STATE_DIR = os.path.join(_HERE, "state")
 TMP_DIR = os.path.join(_HERE, "tmp")
 SUBREDDITS_TXT = os.path.join(_HERE, "subreddits.txt")
 REDDIT_UA = "news-oxide/1.0 (personal daily brief; by u/inshal)"
-REDDIT_PAUSE = 3.0                     # seconds between subreddit requests
+REDDIT_PAUSE = 10.0                    # seconds between subreddit requests
 
 UA = {"User-Agent": "Mozilla/5.0 (daily-brief research script)"}
 MAX_BYTES = 8 * 1024 * 1024            # cap response size as a blowup defense

@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
 """
-curate.py: first half of the curate stage (no LLM).
+curate.py: the curate stage.
   load_day     read the archived sent/<date>-<key>.json snapshots
   normalise    flatten them into one item list, merging items with the same URL
-Item: {id, sources, title, url, meta, hn_url}. The model passes come later.
+  gists        pass 1 (haiku): one-line gist and tags per item, batched
+  themes       pass 2 (sonnet): group gists into themes
+  enforce      every item placed exactly once, whatever the model returned
+  run / main   write sent/<date>-curated.json
+Item: {id, sources, title, url, meta, hn_url}. The model groups and summarises, never drops.
 """
 import sys, hashlib, json, os, urllib.parse
+from concurrent.futures import ThreadPoolExecutor
+
+import claude_cli
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+PROMPTS_DIR = os.path.join(_HERE, "prompts")
 
 KEYS = ["trending", "hackernews", "hnbest", "huggingface", "newrepos", "feeds", "reddit"]
 PERIODS = ["daily", "weekly", "monthly", "yearly"]
@@ -151,9 +161,144 @@ def normalise(day):
     return list(items.values())
 
 
-def main():
-    print("usage: curate.py (CLI arrives in a later task; import load_day / normalise)")
+_STR = {"type": "string"}
+_IDS = {"type": "array", "items": _STR}
+GIST_SCHEMA = {"type": "object", "required": ["items"], "properties": {"items": {
+    "type": "array", "items": {"type": "object", "required": ["id", "gist", "tags"],
+                               "properties": {"id": _STR, "gist": _STR, "tags": _IDS}}}}}
+THEMES_SCHEMA = {"type": "object", "required": ["themes", "rest"], "properties": {
+    "themes": {"type": "array", "items": {"type": "object",
+                                          "required": ["title", "summary", "item_ids"],
+                                          "properties": {"title": _STR, "summary": _STR,
+                                                         "item_ids": _IDS}}},
+    "rest": _IDS}}
+
+
+def _prompt(name, payload):
+    with open(os.path.join(PROMPTS_DIR, name), encoding="utf-8") as f:
+        return f.read().rstrip() + "\n\n" + json.dumps(payload, ensure_ascii=False)
+
+
+def _ask_twice(ask, model, prompt, timeout, schema, key):
+    """One retry; returns the dict only if result[key] is a list."""
+    for _ in range(2):
+        out = ask(model, prompt, timeout, schema=schema)
+        if isinstance(out, dict) and isinstance(out.get(key), list):
+            return out
+    return None
+
+
+def _clean_gist(it, got):
+    g = got.get("gist") if isinstance(got, dict) else None
+    g = g.strip() if isinstance(g, str) else ""
+    if not g:
+        return dict(it, gist=it["title"], tags=[])
+    if len(g) > 140:
+        g = g[:137] + "..."
+    tags = got.get("tags") if isinstance(got.get("tags"), list) else []
+    tags = [t.strip().lower() for t in tags if isinstance(t, str) and t.strip()][:3]
+    return dict(it, gist=g, tags=tags)
+
+
+def gists(items, ask, batch_size=40, workers=3, timeout=120):
+    """Pass 1. Returns copies of items with gist and tags; titles stand in for failures."""
+    def one(batch):
+        payload = [{k: it[k] for k in ("id", "title", "url", "meta", "sources")} for it in batch]
+        out = _ask_twice(ask, "haiku", _prompt("gist.md", payload), timeout, GIST_SCHEMA, "items")
+        got = {g["id"]: g for g in (out or {}).get("items", [])
+               if isinstance(g, dict) and isinstance(g.get("id"), str)}
+        return [_clean_gist(it, got.get(it["id"])) for it in batch]
+    batches = [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return [it for res in pool.map(one, batches) for it in res]
+
+
+def themes(items, ask, timeout=300):
+    """Pass 2. Raw model grouping plus grouped=True, or everything in rest on failure."""
+    payload = [{k: it[k] for k in ("id", "gist", "tags", "sources")} for it in items]
+    out = _ask_twice(ask, "sonnet", _prompt("themes.md", payload), timeout, THEMES_SCHEMA, "themes")
+    if out is None:
+        return {"themes": [], "rest": [it["id"] for it in items], "grouped": False}
+    return dict(out, grouped=True)
+
+
+def _list(v):
+    return v if isinstance(v, list) else []
+
+
+def enforce(items, result):
+    """Place every item id exactly once across themes and rest, repairing the model output."""
+    result = result if isinstance(result, dict) else {}
+    known = {it["id"]: it for it in items}
+    seen, raw = set(), []
+
+    def take(ids):
+        kept = []
+        for i in _list(ids):
+            if isinstance(i, str) and i in known and i not in seen:
+                seen.add(i)
+                kept.append(i)
+        return kept
+
+    for t in _list(result.get("themes")):
+        if isinstance(t, dict):
+            raw.append((t, take(t.get("item_ids"))))
+    rest = take(result.get("rest"))
+    kept = []
+    for n, (t, ids) in enumerate(raw):
+        if len(ids) < 2:
+            rest.extend(ids)
+            continue
+        title = str(t.get("title") if t.get("title") is not None else "").strip() or "Untitled"
+        summary = str(t.get("summary") if t.get("summary") is not None else "").strip()
+        srcs = {s for i in ids for s in known[i]["sources"]}
+        kept.append(((-len(srcs), -len(ids), n), dict(title=title, summary=summary, item_ids=ids)))
+    rest.extend(it["id"] for it in items if it["id"] not in seen)
+    out = [t for _, t in sorted(kept, key=lambda x: x[0])]
+    return {"themes": out, "rest": rest, "grouped": bool(result.get("grouped")) and bool(out)}
+
+
+def run(date, sent_dir, tmp_dir, ask=claude_cli.ask, probe=claude_cli.probe, no_model=False):
+    """Load, gist, theme, enforce; write <sent_dir>/<date>-curated.json and return it."""
+    os.makedirs(tmp_dir, exist_ok=True)
+    day = load_day(sent_dir, date)
+    items = normalise(day)
+    probe_ok = None if no_model else bool(probe())
+    if probe_ok:
+        items = gists(items, ask)
+        result = themes(items, ask)
+    else:
+        items = [dict(it, gist=it["title"], tags=[]) for it in items]
+        result = {"themes": [], "rest": [it["id"] for it in items], "grouped": False}
+    r = enforce(items, result)
+    placed = {i for t in r["themes"] for i in t["item_ids"]} | set(r["rest"])
+    out = dict(date=date, items={it["id"]: it for it in items}, themes=r["themes"], rest=r["rest"],
+               stats=dict(items_in=len(items), items_placed=len(placed),
+                          sources=[k for k in KEYS if k in day], grouped=r["grouped"],
+                          probe_ok=probe_ok))
+    path = os.path.join(sent_dir, "%s-curated.json" % date)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=1)
+    os.replace(path + ".tmp", path)
+    return out
+
+
+def main(argv):
+    args = [a for a in argv if a != "--no-model"]
+    if len(args) != 3 or any(a.startswith("--") for a in args):
+        print("usage: curate.py <date> <sent_dir> <tmp_dir> [--no-model]", file=sys.stderr)
+        return 1
+    out = run(*args, no_model="--no-model" in argv)
+    st = out["stats"]
+    probe = {None: "skipped", True: "ok", False: "failed"}[st["probe_ok"]]
+    print("curate: %d items, %d themes, grouped=%d, probe=%s"
+          % (st["items_in"], len(out["themes"]), st["grouped"], probe))
+    if st["items_in"] != st["items_placed"]:
+        print("curate: invariant broken: %d in, %d placed" % (st["items_in"], st["items_placed"]),
+              file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main(sys.argv[1:]))

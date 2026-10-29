@@ -77,7 +77,7 @@ def test_normalise_reddit_self_post_and_null_counts():
 
 def test_normalise_meta_has_no_em_dash_and_shape():
     for i in curate.normalise(_day()):
-        assert set(i) == {"id", "sources", "title", "url", "meta", "hn_url"}
+        assert set(i) == {"id", "sources", "title", "url", "meta", "hn_url", "desc"}
         assert chr(0x2014) not in i["meta"]
         assert i["title"]
 

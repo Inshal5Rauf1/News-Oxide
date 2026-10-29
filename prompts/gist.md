@@ -1,11 +1,11 @@
 You are writing one-line gists for a daily tech news brief.
 
-Below is a JSON array of items. Each item has an "id", a "title", a "url", a "meta" line (stars, points, authors, dates; free text) and "sources" (which feeds listed it).
+Below is a JSON array of items. Each item has an "id", a "title", a "url", a "meta" line (stars, points, authors, dates; free text), a "desc" (the source's own description of the thing, such as a repository description, a feed summary, a model's task or a paper's authors; it may be empty) and "sources" (which feeds listed it).
 
 For each item write one plain-English sentence of at most 140 characters saying what it is, and 1 to 3 lowercase single-word tags. Do not judge importance. Return every id you were given.
 
 Rules:
-- Describe the thing itself (a library, a model, a paper, an article, a discussion), using the title, url and meta. If you cannot tell what it is, restate the title as a short sentence.
+- Say what the thing is (a library, a model, a paper, an article, a discussion) and what it does or is about. Use desc first, it is the source's own description; then the title, url and meta. If you still cannot tell what it is, restate the title as a short sentence.
 - Do not repeat the numbers from meta (stars, points, likes, downloads, comments); the brief shows meta next to the gist. Say what the thing does or is about instead.
 - Do not use em dashes anywhere. Use commas, colons or periods instead.
 - Do not add opinions, rankings or words like "important", "must-read" or "exciting".

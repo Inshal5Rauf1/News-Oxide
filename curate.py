@@ -7,7 +7,7 @@ curate.py: the curate stage.
   themes       pass 2 (sonnet): group gists into themes
   enforce      every item placed exactly once, whatever the model returned
   run / main   write sent/<date>-curated.json
-Item: {id, sources, title, url, meta, hn_url}. The model groups and summarises, never drops.
+Item: {id, sources, title, url, meta, hn_url, desc}. The model groups and summarises, never drops.
 """
 import sys, hashlib, json, os, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
@@ -70,7 +70,7 @@ def _join(*parts):
 
 def _hn(rows):
     for r in rows:
-        yield dict(title=r.get("title"), url=r.get("url"), hn_url=r.get("hn_url"),
+        yield dict(title=r.get("title"), url=r.get("url"), hn_url=r.get("hn_url"), desc="",
                    meta="%s pts · %s comments" % (_n(r.get("points")), _n(r.get("comments"))))
 
 
@@ -86,6 +86,7 @@ def _trending(d):
     for e in seen.values():
         r = e["r"]
         yield dict(title=r.get("full_name"), url=r.get("url"), hn_url=None,
+                   desc=r.get("description") or "",
                    meta=_join("★ %s ▲ %s" % (_n(r.get("stars")), _n(r.get("stars_gained"))),
                               r.get("language"), ", ".join(e["periods"])))
 
@@ -94,17 +95,20 @@ def _huggingface(d):
     for kind in ("models", "datasets", "spaces"):
         for r in d.get(kind) or []:
             yield dict(title=r.get("id"), url=r.get("url"), hn_url=None,
+                       desc=r.get("pipeline_tag") or r.get("sdk") or "",
                        meta=_join("♥ %s" % _n(r.get("likes")),
                                   "↓ %s" % _n(r["downloads"]) if r.get("downloads") is not None else "",
                                   r.get("pipeline_tag") or r.get("sdk") or kind[:-1]))
     for r in d.get("papers") or []:
         yield dict(title=r.get("title"), url=r.get("url"), hn_url=None,
+                   desc=r.get("authors") or "",
                    meta=_join("▲ %s" % _n(r.get("upvotes")), r.get("authors")))
 
 
 def _newrepos(rows):
     for r in rows:
         yield dict(title=r.get("full_name"), url=r.get("url"), hn_url=None,
+                   desc=r.get("description") or "",
                    meta=_join("★ %s" % _n(r.get("stars")), r.get("language"),
                               "created %s" % (r.get("created_at") or "")[:10]))
 
@@ -112,6 +116,7 @@ def _newrepos(rows):
 def _feeds(rows):
     for r in rows:
         yield dict(title=r.get("title"), url=r.get("url"), hn_url=None,
+                   desc=(r.get("summary") or "")[:300],
                    meta=_join(r.get("feed"), (r.get("published") or "")[:10]))
 
 
@@ -123,6 +128,7 @@ def _reddit(rows):
         if r.get("comments") is not None:
             counts.append("%s comments" % _n(r["comments"]))
         yield dict(title=r.get("title"), url=r.get("url") or r.get("permalink"), hn_url=None,
+                   desc="",
                    meta=_join("r/%s" % r.get("subreddit"), *counts))
 
 
@@ -152,11 +158,13 @@ def normalise(day):
                 url = r["hn_url"] or ""
             it = items.get(slot)
             if it is None:
-                it = items[slot] = dict(id=iid, sources=[], title="", url=url, meta="", hn_url=None)
+                it = items[slot] = dict(id=iid, sources=[], title="", url=url, meta="", hn_url=None,
+                                         desc="")
             if key not in it["sources"]:
                 it["sources"].append(key)
             it["title"] = it["title"] or (r["title"] or "")
             it["hn_url"] = it["hn_url"] or r["hn_url"]
+            it["desc"] = it["desc"] or (r["desc"] if isinstance(r["desc"], str) else "").strip()
             it["meta"] = _join(it["meta"], r["meta"])
     return list(items.values())
 
@@ -179,11 +187,16 @@ def _prompt(name, payload):
         return f.read().rstrip() + "\n\n" + json.dumps(payload, ensure_ascii=False)
 
 
-def _ask_twice(ask, model, prompt, timeout, schema, key):
-    """One retry; returns the dict only if result[key] is a list."""
+def _ask_twice(ask, model, prompt, timeout, schema, key, stage):
+    """One retry; returns the dict only if result[key] is a non-empty list."""
     for _ in range(2):
-        out = ask(model, prompt, timeout, schema=schema)
-        if isinstance(out, dict) and isinstance(out.get(key), list):
+        try:
+            out = ask(model, prompt, timeout, schema=schema)
+        except Exception as e:
+            print("curate: %s raised: %s" % (stage, e), file=sys.stderr)
+            out = None
+        got = out.get(key) if isinstance(out, dict) else None
+        if isinstance(got, list) and (got or key != "items"):     # empty gist list = failure
             return out
     return None
 
@@ -203,8 +216,10 @@ def _clean_gist(it, got):
 def gists(items, ask, batch_size=40, workers=3, timeout=120):
     """Pass 1. Returns copies of items with gist and tags; titles stand in for failures."""
     def one(batch):
-        payload = [{k: it[k] for k in ("id", "title", "url", "meta", "sources")} for it in batch]
-        out = _ask_twice(ask, "haiku", _prompt("gist.md", payload), timeout, GIST_SCHEMA, "items")
+        payload = [{k: it[k] for k in ("id", "title", "url", "meta", "desc", "sources")}
+                   for it in batch]
+        out = _ask_twice(ask, "haiku", _prompt("gist.md", payload), timeout, GIST_SCHEMA, "items",
+                         "gists")
         got = {g["id"]: g for g in (out or {}).get("items", [])
                if isinstance(g, dict) and isinstance(g.get("id"), str)}
         return [_clean_gist(it, got.get(it["id"])) for it in batch]
@@ -216,7 +231,8 @@ def gists(items, ask, batch_size=40, workers=3, timeout=120):
 def themes(items, ask, timeout=300):
     """Pass 2. Raw model grouping plus grouped=True, or everything in rest on failure."""
     payload = [{k: it[k] for k in ("id", "gist", "tags", "sources")} for it in items]
-    out = _ask_twice(ask, "sonnet", _prompt("themes.md", payload), timeout, THEMES_SCHEMA, "themes")
+    out = _ask_twice(ask, "sonnet", _prompt("themes.md", payload), timeout, THEMES_SCHEMA, "themes",
+                     "themes")
     if out is None:
         return {"themes": [], "rest": [it["id"] for it in items], "grouped": False}
     return dict(out, grouped=True)
@@ -258,12 +274,28 @@ def enforce(items, result):
     return {"themes": out, "rest": rest, "grouped": bool(result.get("grouped")) and bool(out)}
 
 
+def _placed(r):
+    return [i for t in r["themes"] for i in t["item_ids"]] + list(r["rest"])
+
+
+def placement_ok(out):
+    """Belt to enforce's braces: every item id placed exactly once."""
+    placed = _placed(out)
+    return len(placed) == len(out["items"]) and set(placed) == set(out["items"])
+
+
 def run(date, sent_dir, tmp_dir, ask=claude_cli.ask, probe=claude_cli.probe, no_model=False):
     """Load, gist, theme, enforce; write <sent_dir>/<date>-curated.json and return it."""
     os.makedirs(tmp_dir, exist_ok=True)
     day = load_day(sent_dir, date)
     items = normalise(day)
-    probe_ok = None if no_model else bool(probe())
+    probe_ok = None
+    if not no_model:
+        try:
+            probe_ok = bool(probe())
+        except Exception as e:
+            print("curate: probe raised: %s" % e, file=sys.stderr)
+            probe_ok = False
     if probe_ok:
         items = gists(items, ask)
         result = themes(items, ask)
@@ -271,7 +303,7 @@ def run(date, sent_dir, tmp_dir, ask=claude_cli.ask, probe=claude_cli.probe, no_
         items = [dict(it, gist=it["title"], tags=[]) for it in items]
         result = {"themes": [], "rest": [it["id"] for it in items], "grouped": False}
     r = enforce(items, result)
-    placed = {i for t in r["themes"] for i in t["item_ids"]} | set(r["rest"])
+    placed = _placed(r)
     out = dict(date=date, items={it["id"]: it for it in items}, themes=r["themes"], rest=r["rest"],
                stats=dict(items_in=len(items), items_placed=len(placed),
                           sources=[k for k in KEYS if k in day], grouped=r["grouped"],
@@ -293,9 +325,9 @@ def main(argv):
     probe = {None: "skipped", True: "ok", False: "failed"}[st["probe_ok"]]
     print("curate: %d items, %d themes, grouped=%d, probe=%s"
           % (st["items_in"], len(out["themes"]), st["grouped"], probe))
-    if st["items_in"] != st["items_placed"]:
-        print("curate: invariant broken: %d in, %d placed" % (st["items_in"], st["items_placed"]),
-              file=sys.stderr)
+    if not placement_ok(out):
+        print("curate: invariant broken: %d in, %d placed, ids differ or repeat"
+              % (st["items_in"], st["items_placed"]), file=sys.stderr)
         return 2
     return 0
 

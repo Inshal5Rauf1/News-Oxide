@@ -9,7 +9,8 @@ DATE = "2026-10-29"
 
 def _items(n, sources=None):
     return [dict(id="i%d" % k, sources=list((sources or {}).get(k, ["hackernews"])),
-                 title="Title %d" % k, url="https://e.com/%d" % k, meta="m", hn_url=None)
+                 title="Title %d" % k, url="https://e.com/%d" % k, meta="m", hn_url=None,
+                 desc="d")
             for k in range(n)]
 
 
@@ -33,7 +34,7 @@ def test_gists_batches_and_fills_missing_with_title():
         with lock:
             calls.append([b["id"] for b in batch])
         assert model == "haiku" and schema == curate.GIST_SCHEMA and timeout == 120
-        assert set(batch[0]) == {"id", "title", "url", "meta", "sources"}
+        assert set(batch[0]) == {"id", "title", "url", "meta", "desc", "sources"}
         out = [dict(id=b["id"], gist="  Gist of %s.  " % b["id"], tags=["LLM", 3, "a", "b", "c"])
                for b in batch if b["id"] != "i3"]
         return {"items": out}
@@ -211,3 +212,75 @@ def test_cli_no_model_and_usage(tmp_path):
     p = subprocess.run([sys.executable, os.path.join(ROOT, "curate.py"), DATE],
                        capture_output=True, text=True)
     assert p.returncode == 1 and "usage" in p.stderr
+
+
+def test_gists_raising_ask_falls_back_for_that_batch_only(capsys):
+    def ask(model, prompt, timeout, schema=None):
+        batch = _batch(prompt)
+        if batch[0]["id"] == "i2":
+            raise RuntimeError("boom")
+        return {"items": [dict(id=b["id"], gist="G " + b["id"], tags=[]) for b in batch]}
+
+    out = curate.gists(_items(5), ask, batch_size=2)
+    assert [o["gist"] for o in out] == ["G i0", "G i1", "Title 2", "Title 3", "G i4"]
+    assert capsys.readouterr().err.count("curate: gists raised: boom") == 2
+
+
+def test_gists_empty_items_for_nonempty_batch_retried_then_titles():
+    calls, lock = {}, threading.Lock()
+
+    def ask(model, prompt, timeout, schema=None):
+        batch = _batch(prompt)
+        with lock:
+            calls[batch[0]["id"]] = calls.get(batch[0]["id"], 0) + 1
+        if batch[0]["id"] == "i0":
+            return {"items": []}
+        return {"items": [dict(id=b["id"], gist="G " + b["id"], tags=[]) for b in batch]}
+
+    out = curate.gists(_items(3), ask, batch_size=2)
+    assert calls == {"i0": 2, "i2": 1}
+    assert [(o["id"], o["gist"]) for o in out] == [("i0", "Title 0"), ("i1", "Title 1"),
+                                                   ("i2", "G i2")]
+
+
+def test_run_raising_probe_skips_model_and_still_writes(tmp_path, capsys):
+    sent = _day_dir(tmp_path)
+
+    def probe():
+        raise OSError("no cli")
+
+    def ask(*a, **k):
+        raise AssertionError("ask must not be called")
+
+    out = curate.run(DATE, sent, str(tmp_path / "tmp"), ask=ask, probe=probe)
+    assert os.path.exists(os.path.join(sent, DATE + "-curated.json"))
+    assert out["stats"]["probe_ok"] is False and out["stats"]["grouped"] is False
+    assert len(out["rest"]) == out["stats"]["items_in"] == 36
+    assert "curate: probe raised: no cli" in capsys.readouterr().err
+
+
+def test_main_exits_2_when_placement_repeats_an_id(tmp_path, monkeypatch, capsys):
+    sent = _day_dir(tmp_path)
+
+    def bad_enforce(items, result):
+        ids = [it["id"] for it in items]
+        return {"themes": [], "rest": ids[:-1] + ids[:1], "grouped": False}   # same count
+
+    monkeypatch.setattr(curate, "enforce", bad_enforce)
+    assert curate.main([DATE, sent, str(tmp_path / "t"), "--no-model"]) == 2
+    assert os.path.exists(os.path.join(sent, DATE + "-curated.json"))
+    assert "invariant broken: 36 in, 36 placed" in capsys.readouterr().err
+
+
+def test_normalise_desc_per_source():
+    day = {"trending": {"daily": [dict(full_name="a/b", url="https://github.com/a/b",
+                                       description="A tool")]},
+           "feeds": [dict(title="Post", url="https://github.com/a/b", summary="x" * 400),
+                     dict(title="Post 2", url="https://blog.example/2", summary="y" * 400)],
+           "huggingface": {"models": [dict(id="m", url="https://hf.co/m", pipeline_tag="text-gen")],
+                           "spaces": [dict(id="s", url="https://hf.co/s", sdk="gradio")],
+                           "papers": [dict(title="P", url="https://hf.co/p", authors="Ann, Bo")]},
+           "hackernews": [dict(title="HN", url="https://news.example/1", hn_url="https://hn/1")]}
+    got = {i["title"]: i["desc"] for i in curate.normalise(day)}
+    assert got == {"a/b": "A tool", "Post 2": "y" * 300, "m": "text-gen", "s": "gradio",
+                   "P": "Ann, Bo", "HN": ""}                     # merged a/b keeps first desc

@@ -212,7 +212,7 @@
 - `main` gains subcommands `releases <data_json> <date> <out_html>` and `eml` with an optional 5th positional `attach_path`.
 
 - [ ] **Step 1: Capture a fixture** of current `build_eml` output for a small HTML file (`tests/fixtures/eml_before.eml`, with `FROM_ADDR` unset so the default From is used) BEFORE editing.
-- [ ] **Step 2: Write failing tests**: `test_build_eml_without_attachment_unchanged` (compare to fixture, ignoring nothing), `test_build_eml_with_attachment_is_multipart` (parse with `email.message_from_bytes`, two parts, second has `Content-Disposition: attachment; filename="curated-2026-10-29.html"`), `test_render_releases_rows`, `test_no_em_dash_in_any_renderer` (render all five renderers on fixtures and heartbeat; assert `"—" not in html`).
+- [ ] **Step 2: Write failing tests**: `test_build_eml_without_attachment_unchanged` (compare to fixture, ignoring nothing), `test_build_eml_with_attachment_is_multipart` (parse with `email.message_from_bytes`, two parts, second has `Content-Disposition: attachment; filename="curated-2026-10-29.html"`), `test_render_releases_rows`, `test_no_em_dash_in_any_renderer` (render all five renderers on fixtures and heartbeat; assert `"\u2014" not in html`).
 - [ ] **Step 3: Run**, expect FAIL (em dash test fails on current strings).
 - [ ] **Step 4: Implement**; replace the em dashes in `render_trending` and `render_hackernews` sub-lines with ` · `.
 - [ ] **Step 5: Run** tests, expect PASS.

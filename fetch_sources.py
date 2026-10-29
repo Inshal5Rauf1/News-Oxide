@@ -7,10 +7,12 @@ fetch_sources.py: deterministic snapshot sources (no API keys, no LLM).
   newrepos     GitHub repos created in the last 7 days with >=100 stars
   hnbest       top HN stories from the last 24h, by points
   feeds        curated RSS/Atom feeds from feeds.opml (last 26h, plus unseen undated items)
-  reddit       hot posts from subreddits.txt (stickied posts skipped)
+  reddit       hot posts from subreddits.txt (RSS; stickied posts not detectable)
 Each prints a JSON snapshot to stdout; render_email.py renders it as-is.
 """
 import sys, gzip, io, json, os, re, time, urllib.parse, urllib.request
+import xml.etree.ElementTree as ET
+from html import unescape
 from datetime import datetime, timedelta, timezone
 
 import feedparse
@@ -243,34 +245,44 @@ def feeds():
         raise SystemExit(3)
 
 
+def _reddit_links(text):
+    """Per Atom entry, in document order: the href of the footer [link] anchor in its
+    HTML content (the external URL, or the permalink for a self post), else None."""
+    out = []
+    for e in ET.fromstring(text).iter():
+        if not isinstance(e.tag, str) or e.tag.split("}")[-1] != "entry":
+            continue
+        content = next((c.text or "" for c in e if c.tag.split("}")[-1] == "content"), "")
+        hrefs = re.findall(r'<a href="([^"]+)">\[link\]', content)
+        out.append(unescape(hrefs[-1]) if hrefs else None)
+    return out
+
+
 def reddit():
     with open(SUBREDDITS_TXT, encoding="utf-8") as f:
         subs = [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
     out, urls, failed = [], set(), 0
     for sub in subs:
         try:
-            url = f"https://www.reddit.com/r/{sub}/hot.json?limit=25"
-            children = json.loads(get(url, headers={"User-Agent": REDDIT_UA}))["data"]["children"]
+            text = get(f"https://www.reddit.com/r/{sub}/hot.rss", headers={"User-Agent": REDDIT_UA})
+            items = feedparse.parse_feed(text)
+            if not items:
+                raise ValueError("no entries parsed")
         except Exception as e:
             failed += 1
             print(f"reddit: r/{sub} failed: {' '.join(str(e).split())}", file=sys.stderr)
             continue
-        for c in children:
-            d = c["data"]
-            if d.get("stickied"):
-                continue
-            permalink = "https://www.reddit.com" + d["permalink"]
-            link = permalink if d.get("is_self") else (d.get("url") or permalink)
+        for it, ext in zip(items, _reddit_links(text)):
+            permalink = it["url"]
+            link = ext if ext and ext != permalink else permalink
             if link in urls:          # crosspost: first subreddit wins
                 continue
             urls.add(link)
-            out.append({"title": d.get("title"), "url": link, "subreddit": sub,
-                        "score": d.get("score"), "comments": d.get("num_comments"),
-                        "permalink": permalink})
+            out.append({"title": it["title"], "url": link, "subreddit": sub,
+                        "score": None, "comments": None, "permalink": permalink})
     print(json.dumps(out))
     if subs and failed == len(subs):
         raise SystemExit(3)
-
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""

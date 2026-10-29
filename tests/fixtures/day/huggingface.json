@@ -1,0 +1,85 @@
+{
+ "models": [
+  {
+   "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+   "url": "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+   "likes": 3715,
+   "downloads": 131062,
+   "pipeline_tag": "image-text-to-text"
+  },
+  {
+   "id": "Nanbeige/Nanbeige4.3-33B",
+   "url": "https://huggingface.co/Nanbeige/Nanbeige4.3-33B",
+   "likes": 759,
+   "downloads": 9655,
+   "pipeline_tag": "text-generation"
+  },
+  {
+   "id": "RecursiveSI/flint",
+   "url": "https://huggingface.co/RecursiveSI/flint",
+   "likes": 1230,
+   "downloads": 16598,
+   "pipeline_tag": "text-generation"
+  }
+ ],
+ "datasets": [
+  {
+   "id": "nvidia/simready-assets",
+   "url": "https://huggingface.co/datasets/nvidia/simready-assets",
+   "likes": 908,
+   "downloads": 839384
+  },
+  {
+   "id": "scenario-labs/3d-collection",
+   "url": "https://huggingface.co/datasets/scenario-labs/3d-collection",
+   "likes": 318,
+   "downloads": 34295
+  },
+  {
+   "id": "Vyber07/cyber-security",
+   "url": "https://huggingface.co/datasets/Vyber07/cyber-security",
+   "likes": 468,
+   "downloads": 6610
+  }
+ ],
+ "spaces": [
+  {
+   "id": "glitchlab/MiniMax-H3-Turbo-Lora-UNCENSORED-Workflow",
+   "url": "https://huggingface.co/spaces/glitchlab/MiniMax-H3-Turbo-Lora-UNCENSORED-Workflow",
+   "likes": 552,
+   "sdk": "gradio"
+  },
+  {
+   "id": "nvidia/simready-central",
+   "url": "https://huggingface.co/spaces/nvidia/simready-central",
+   "likes": 267,
+   "sdk": "docker"
+  },
+  {
+   "id": "kulkas2pintu/wan777",
+   "url": "https://huggingface.co/spaces/kulkas2pintu/wan777",
+   "likes": 1074,
+   "sdk": "gradio"
+  }
+ ],
+ "papers": [
+  {
+   "title": "Evaluating DeepSeek V4.1 Flash-1017 for loss of control and harmful manipulation risks",
+   "url": "https://huggingface.co/papers/2610.35671",
+   "upvotes": 2,
+   "authors": "Yao Huang, Zhiyuan Zeng, Yu Wang, Zhitong Zhu"
+  },
+  {
+   "title": "Amortizing Sequential Experimental Design in Reasoning LLMs",
+   "url": "https://huggingface.co/papers/2610.20832",
+   "upvotes": 3,
+   "authors": "Anita Kriz, Antonin Berthon, Nicolás Astorga, Mihaela van der Schaar"
+  },
+  {
+   "title": "RealCLI: Toward a Unified Evaluation of Human-Agent Collaboration for CLI Agents",
+   "url": "https://huggingface.co/papers/2610.22507",
+   "upvotes": 15,
+   "authors": "Yunqi Liu, Peiyu Wang, Bingli Wang, Leo Luo"
+  }
+ ]
+}

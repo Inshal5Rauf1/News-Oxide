@@ -1,0 +1,23 @@
+[
+ {
+  "title": "Feed article",
+  "url": "https://blog.example.org/post/feed-article",
+  "feed": "Example Blog",
+  "published": "2026-10-28T08:00:00Z",
+  "summary": "s"
+ },
+ {
+  "title": "Feed two",
+  "url": "https://blog.example.org/post/two",
+  "feed": "Example Blog",
+  "published": "2026-10-28T09:00:00Z",
+  "summary": "s"
+ },
+ {
+  "title": "Feed three",
+  "url": "https://other.example.org/three",
+  "feed": "Other",
+  "published": "",
+  "summary": ""
+ }
+]

@@ -1,0 +1,26 @@
+[
+ {
+  "title": "External link post",
+  "url": "https://example.org/reddit-link",
+  "subreddit": "programming",
+  "score": 123,
+  "comments": 45,
+  "permalink": "https://www.reddit.com/r/programming/comments/abc/x/"
+ },
+ {
+  "title": "Self post",
+  "url": "https://www.reddit.com/r/rust/comments/def/self/",
+  "subreddit": "rust",
+  "score": null,
+  "comments": null,
+  "permalink": "https://www.reddit.com/r/rust/comments/def/self/"
+ },
+ {
+  "title": "Third",
+  "url": "https://example.org/third",
+  "subreddit": "python",
+  "score": 7,
+  "comments": null,
+  "permalink": "https://www.reddit.com/r/python/comments/ghi/y/"
+ }
+]

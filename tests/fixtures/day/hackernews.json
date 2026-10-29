@@ -1,0 +1,34 @@
+[
+ {
+  "title": "Why is this fingerprinting script creating bioweapons?",
+  "url": "https://nullpt.rs/fingerprinting-bioweapons",
+  "points": 1474,
+  "comments": 273,
+  "hn_url": "https://news.ycombinator.com/item?id=50276998",
+  "author": "hazebooth"
+ },
+ {
+  "title": "StackOverflow now gets fewer than 1000 questions a month",
+  "url": "https://example.com/articles/shared-story",
+  "points": 686,
+  "comments": 581,
+  "hn_url": "https://news.ycombinator.com/item?id=50282454",
+  "author": "babelfish"
+ },
+ {
+  "title": "Qwenputer: A functioning, deterministic RISC-V CPU inside Qwen3.5",
+  "url": "https://blog.example.org/post/feed-article",
+  "points": 640,
+  "comments": 136,
+  "hn_url": "https://news.ycombinator.com/item?id=50282838",
+  "author": "csmantle"
+ },
+ {
+  "title": "CNC Stone Carving",
+  "url": "https://carmelitegothic.com/cnc-stone-carving/",
+  "points": 513,
+  "comments": 141,
+  "hn_url": "https://news.ycombinator.com/item?id=50274409",
+  "author": "bschne"
+ }
+]

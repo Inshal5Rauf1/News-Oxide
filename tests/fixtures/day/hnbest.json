@@ -1,0 +1,26 @@
+[
+ {
+  "title": "Shared story (best)",
+  "url": "http://www.example.com/articles/shared-story/?utm_source=x",
+  "points": 900,
+  "comments": 120,
+  "hn_url": "https://news.ycombinator.com/item?id=111",
+  "author": "a"
+ },
+ {
+  "title": "Only on best",
+  "url": "https://example.net/only-best",
+  "points": 500,
+  "comments": 60,
+  "hn_url": "https://news.ycombinator.com/item?id=112",
+  "author": "b"
+ },
+ {
+  "title": "Another best",
+  "url": "https://example.net/another#top",
+  "points": 400,
+  "comments": 30,
+  "hn_url": "https://news.ycombinator.com/item?id=113",
+  "author": "c"
+ }
+]

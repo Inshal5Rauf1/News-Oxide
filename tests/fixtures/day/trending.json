@@ -1,0 +1,146 @@
+{
+ "daily": [
+  {
+   "rank": 1,
+   "full_name": "Edge0-AI/Edge0",
+   "url": "https://github.com/Edge0-AI/Edge0",
+   "description": "Run 35B MoE models in ~2.5 GB of RAM. Weights stream from SSD; a trained router ",
+   "language": "Python",
+   "stars": 8690,
+   "stars_gained": 1254,
+   "tags": [
+    "LLM inference"
+   ]
+  },
+  {
+   "rank": 2,
+   "full_name": "pbakaus/impeccable",
+   "url": "https://github.com/pbakaus/impeccable",
+   "description": "The design language that makes your AI harness better at design.",
+   "language": "Rust",
+   "stars": 94585,
+   "stars_gained": 2079,
+   "tags": [
+    "AI skills"
+   ]
+  },
+  {
+   "rank": 3,
+   "full_name": "anhao/ai-pose-gallery-zh",
+   "url": "https://github.com/anhao/ai-pose-gallery-zh",
+   "description": "中文版 AI 姿势参考图库 · 1439 组 / 2878 张图片 / 完整汉化 · 零依赖静态画廊",
+   "language": "Python",
+   "stars": 2758,
+   "stars_gained": 1068,
+   "tags": []
+  }
+ ],
+ "weekly": [
+  {
+   "rank": 1,
+   "full_name": "hmjz100/LinkSwift",
+   "url": "https://github.com/hmjz100/LinkSwift",
+   "description": "一个基于 JavaScript 的网盘文件下载地址获取工具。基于【网盘直链下载助手】修改 ，支持 百度网盘 / 阿里云盘 / 中国移动云盘 / 天翼云盘 / 迅",
+   "language": "JavaScript",
+   "stars": 36128,
+   "stars_gained": 8288,
+   "tags": []
+  },
+  {
+   "rank": 2,
+   "full_name": "Edge0-AI/Edge0",
+   "url": "https://github.com/Edge0-AI/Edge0",
+   "description": "Run 35B MoE models in ~2.5 GB of RAM. Weights stream from SSD; a trained router ",
+   "language": "Python",
+   "stars": 8690,
+   "stars_gained": 3000,
+   "tags": [
+    "LLM inference"
+   ]
+  },
+  {
+   "rank": 3,
+   "full_name": "Acme/Tool",
+   "url": "https://github.com/Acme/Tool",
+   "description": "DeepTutor: Lifelong Personalized Tutoring. https://deeptutor.info/.",
+   "language": "Python",
+   "stars": 49355,
+   "stars_gained": 6741,
+   "tags": []
+  }
+ ],
+ "monthly": [
+  {
+   "rank": 1,
+   "full_name": "morluto/rea",
+   "url": "https://github.com/morluto/rea",
+   "description": "Reverse engineer anything with agents, from app behavior down to native binaries",
+   "language": "TypeScript",
+   "stars": 406136,
+   "stars_gained": 405838,
+   "tags": []
+  },
+  {
+   "rank": 2,
+   "full_name": "storytold/photocraft",
+   "url": "https://github.com/storytold/photocraft",
+   "description": "PhotoCraft: An open-source, photo editor written by scratch in pure Rust",
+   "language": "Rust",
+   "stars": 74701,
+   "stars_gained": 74541,
+   "tags": [
+    "Image editing"
+   ]
+  },
+  {
+   "rank": 3,
+   "full_name": "Ebony-Vinyl/dsh-our-free-model",
+   "url": "https://github.com/Ebony-Vinyl/dsh-our-free-model",
+   "description": "在 dsh 里装上这个插件即可，无需登录、注册或填 API Key，就能使用包括 DeepSeek V4.1 Flash、Kimi K3 在内的前沿模型--完全",
+   "language": "JavaScript",
+   "stars": 50379,
+   "stars_gained": 50093,
+   "tags": [
+    "LLM gateway"
+   ]
+  }
+ ],
+ "yearly": [
+  {
+   "rank": 1,
+   "full_name": "openclaw/openclaw",
+   "url": "https://github.com/openclaw/openclaw",
+   "description": "The AI that really does things. Any OS. Any Platform. The lobster way. 🦞 ",
+   "language": "TypeScript",
+   "stars": 393354,
+   "stars_gained": 397977,
+   "tags": [
+    "AI agent"
+   ]
+  },
+  {
+   "rank": 2,
+   "full_name": "obra/superpowers",
+   "url": "https://github.com/obra/superpowers",
+   "description": "An agentic skills framework & software development methodology that works.",
+   "language": "Shell",
+   "stars": 308089,
+   "stars_gained": 296578,
+   "tags": [
+    "AI skills"
+   ]
+  },
+  {
+   "rank": 3,
+   "full_name": "NousResearch/hermes-agent",
+   "url": "https://github.com/NousResearch/hermes-agent",
+   "description": "The agent that grows with you",
+   "language": "Python",
+   "stars": 258402,
+   "stars_gained": 259442,
+   "tags": [
+    "AI agent"
+   ]
+  }
+ ]
+}

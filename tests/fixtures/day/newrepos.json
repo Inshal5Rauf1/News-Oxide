@@ -1,0 +1,26 @@
+[
+ {
+  "full_name": "Acme/Tool",
+  "url": "https://github.com/Acme/Tool",
+  "description": "A new tool",
+  "language": "Rust",
+  "stars": 234,
+  "created_at": "2026-10-25T10:00:00Z"
+ },
+ {
+  "full_name": "foo/bar",
+  "url": "https://github.com/foo/bar",
+  "description": "Bar",
+  "language": "Go",
+  "stars": 150,
+  "created_at": "2026-10-26T10:00:00Z"
+ },
+ {
+  "full_name": "baz/qux",
+  "url": "https://github.com/baz/qux",
+  "description": "",
+  "language": null,
+  "stars": 120,
+  "created_at": "2026-10-27T10:00:00Z"
+ }
+]

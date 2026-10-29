@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-render_email.py — snapshot-brief renderer + MIME builder.
+render_email.py: snapshot-brief renderer + MIME builder.
 
 Subcommands:
-  trending|huggingface|hackernews <data_json> <date> <out_html>   render a snapshot email
-  heartbeat <date> <out_html>                                     all-empty heartbeat HTML
-  eml <subject> <html_file> <to_csv> <out_path>                   write RFC822 for gmail upload
+  trending|huggingface|hackernews|releases <data_json> <date> <out_html>   render a snapshot email
+  heartbeat <date> <out_html>                                              all-empty heartbeat HTML
+  eml <subject> <html_file> <to_csv> <out_path> [attach_path]              write RFC822 for gmail upload
 
 Design "dark tech": GitHub-dark palette, monospace labels, neon accents.
 Email-client hardened: table-based layout, inline styles, explicit bgcolor.
 """
 import os
 import sys, json, html
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 # ---- palette -----------------------------------------------------------------
@@ -109,7 +112,7 @@ def render_trending(data, date):
         rows.append(group_header(f"{label.upper()} TRENDING ({len(repos)})"))
         rows += [render_repo_row(r) for r in repos if r.get("full_name")]
     total = sum(len(data.get(k, []) or []) for k, _ in periods)
-    hdr = _hdr("github-trending", "GitHub Trending", date, "Trendshift mirror — daily · weekly · monthly · yearly")
+    hdr = _hdr("github-trending", "GitHub Trending", date, "Trendshift mirror · daily · weekly · monthly · yearly")
     return _doc(hdr, "".join(rows), f"{total} repos · source: trendshift.io · saved locally")
 
 
@@ -160,14 +163,34 @@ def render_hackernews(data, date):
                     f'<span style="color:{MUTED};font-family:{MONO};font-size:11px;">#{i}</span> '
                     f'<a href="{url}" style="color:{LINK};text-decoration:none;font-weight:600;font-size:14px;font-family:{SANS};">{title}</a>'
                     f'<div style="margin-top:2px;">{meta}</div></td></tr>')
-    return _doc(_hdr("hacker-news", "Hacker News", date, "top front-page stories — all topics"),
+    return _doc(_hdr("hacker-news", "Hacker News", date, "top front-page stories · all topics"),
                 "".join(rows), f"{len(data)} stories · source: news.ycombinator.com")
+
+
+# ---- GitHub Releases ---------------------------------------------------------
+def render_release_row(r):
+    repo = esc(r.get("repo", ""))
+    url = esc(r.get("url", "#"))
+    tag = r.get("tag") or ""
+    tag_pill = f' {_gray_pill(tag)}' if tag else ""
+    return (f'<tr><td style="padding:9px 0;border-bottom:1px solid {BORDER};">'
+            f'<div><a href="{url}" style="color:{LINK};text-decoration:none;font-weight:700;font-size:14px;font-family:{SANS};">{repo}</a>'
+            f'&nbsp;{tag_pill} &nbsp;{_meta(esc((r.get("published") or "")[:10]))}</div>'
+            f'<div style="color:#c9d1d9;font-size:12px;margin-top:2px;font-family:{SANS};">{esc(r.get("notes", ""))}</div>'
+            f'</td></tr>')
+
+
+def render_releases(data, date):
+    rows = [group_header(f"NEW RELEASES ({len(data)})")]
+    rows += [render_release_row(r) for r in data]
+    return _doc(_hdr("releases", "Releases", date, "new releases of tools you use"),
+                "".join(rows), f"{len(data)} releases · source: github.com releases.atom")
 
 
 # ---- heartbeat (all three snapshots empty) -----------------------------------
 def render_heartbeat(date):
     msg = ("All snapshot sources returned nothing this cycle. The brief ran "
-           "successfully &mdash; there was simply nothing to report.")
+           "successfully. There was simply nothing to report.")
     inner = (f'<tr><td style="padding:18px 0;color:#c9d1d9;font-size:14px;line-height:1.6;font-family:{SANS};">'
              f'{msg}</td></tr>')
     header = (f'<div style="font-family:{MONO};font-size:12px;color:{GREEN};">'
@@ -178,11 +201,21 @@ def render_heartbeat(date):
 
 
 # ---- MIME --------------------------------------------------------------------
-def build_eml(subject, html_file, to_csv, out_path):
+def build_eml(subject, html_file, to_csv, out_path, attach=None):
     """Write the raw RFC822 message to a file for Gmail media upload (no arg-size limit)."""
     with open(html_file, encoding="utf-8") as f:
         html_body = f.read()
-    msg = MIMEText(html_body, "html", "utf-8")
+    if attach:
+        msg = MIMEMultipart("mixed")
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        part = MIMEBase("text", "html")
+        with open(attach, "rb") as f:
+            part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=os.path.basename(attach))
+        msg.attach(part)
+    else:
+        msg = MIMEText(html_body, "html", "utf-8")
     msg["Subject"] = subject
     msg["From"] = os.environ.get("FROM_ADDR", "daily-brief@localhost")
     msg["To"] = to_csv
@@ -195,13 +228,14 @@ def build_eml(subject, html_file, to_csv, out_path):
 
 def main():
     if len(sys.argv) < 2:
-        sys.exit("usage: render_email.py trending|huggingface|hackernews|heartbeat|eml ...")
+        sys.exit("usage: render_email.py trending|huggingface|hackernews|releases|heartbeat|eml ...")
     cmd = sys.argv[1]
-    if cmd in ("trending", "huggingface", "hackernews"):
+    if cmd in ("trending", "huggingface", "hackernews", "releases"):
         items_json, date, out_html = sys.argv[2:5]
         with open(items_json, encoding="utf-8") as f:
             data = json.load(f)
-        fn = {"trending": render_trending, "huggingface": render_huggingface, "hackernews": render_hackernews}[cmd]
+        fn = {"trending": render_trending, "huggingface": render_huggingface,
+              "hackernews": render_hackernews, "releases": render_releases}[cmd]
         with open(out_html, "w", encoding="utf-8") as f:
             f.write(fn(data, date))
     elif cmd == "heartbeat":
@@ -210,7 +244,8 @@ def main():
             f.write(render_heartbeat(date))
     elif cmd == "eml":
         subject, html_file, to_csv, out_path = sys.argv[2:6]
-        build_eml(subject, html_file, to_csv, out_path)
+        attach = sys.argv[6] if len(sys.argv) > 6 else None
+        build_eml(subject, html_file, to_csv, out_path, attach)
     else:
         sys.exit(f"unknown subcommand: {cmd}")
 

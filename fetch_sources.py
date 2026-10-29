@@ -341,11 +341,16 @@ def releases():
     repos = sorted(set(listed) | set(_starred()))
     state_path = os.path.join(STATE_DIR, "releases.json")
     first_run = not os.path.exists(state_path)
-    try:
-        with open(state_path) as f:
-            seen = json.load(f)
-    except (OSError, ValueError):
-        seen = {}
+    seen = {}
+    if not first_run:
+        try:
+            with open(state_path) as f:
+                seen = json.load(f)
+            if not isinstance(seen, dict):
+                raise ValueError("not a dict")
+        except (OSError, ValueError):
+            print("releases: state unreadable, reseeding", file=sys.stderr)
+            seen, first_run = {}, True
 
     def fetch(repo):
         try:
@@ -362,6 +367,7 @@ def releases():
     for repo, items in zip(repos, results):
         if items is None:
             failed += 1
+            state[repo] = seen.get(repo, [])      # keep history so a blip does not re-announce
             continue
         items.sort(key=lambda it: feedparse.parse_date(it["published"]) or epoch, reverse=True)
         state[repo] = [it["id"] for it in items][:20]
@@ -374,12 +380,13 @@ def releases():
                         "name": it["title"], "url": it["url"], "published": it["published"],
                         "notes": it["summary"][:300]})
     out.sort(key=lambda r: feedparse.parse_date(r["published"]), reverse=True)
+    if repos and failed == len(repos):
+        print("[]")
+        raise SystemExit(3)                       # no state file: never commit an empty state
     os.makedirs(TMP_DIR, exist_ok=True)
     with open(os.path.join(TMP_DIR, "releases.state.json"), "w") as f:
         json.dump(state, f)
     print(json.dumps(out))
-    if repos and failed == len(repos):
-        raise SystemExit(3)
 
 
 _STATE_FILES = {"feeds": "feeds_seen.json", "releases": "releases.json"}

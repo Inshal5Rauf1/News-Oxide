@@ -85,7 +85,8 @@ def test_releases_starred_merge_and_failure_tolerated(monkeypatch, tmp_path, cap
     cap = capsys.readouterr()
     assert {r["repo"] for r in json.loads(cap.out)} == {"a/a", "s/s"}
     assert "releases: bad/bad failed: boom" in cap.err
-    assert set(_state(tmp_path)) == {"a/a", "s/s"}
+    assert set(_state(tmp_path)) == {"a/a", "s/s", "bad/bad"}
+    assert _state(tmp_path)["bad/bad"] == []
 
     _setup(monkeypatch, tmp_path, pages, ["a/a"], seen={}, starred=RuntimeError("rate limited"))
     fetch_sources.releases()
@@ -101,6 +102,27 @@ def test_releases_all_failing_exits_3(monkeypatch, tmp_path, capsys):
         fetch_sources.releases()
     assert e.value.code == 3
     assert json.loads(capsys.readouterr().out) == []
+    assert not (tmp_path / "tmp" / "releases.state.json").exists()
+
+
+def test_releases_failed_repo_keeps_previous_ids(monkeypatch, tmp_path, capsys):
+    now = datetime.now(timezone.utc)
+    pages = {"a/a": _atom("a/a", [("v1", now)]), "bad/bad": RuntimeError("boom")}
+    _setup(monkeypatch, tmp_path, pages, ["a/a", "bad/bad"], seen={"a/a": ["x"], "bad/bad": ["p1", "p2"]})
+    fetch_sources.releases()
+    assert _state(tmp_path)["bad/bad"] == ["p1", "p2"]
+
+
+def test_releases_corrupt_state_reseeds(monkeypatch, tmp_path, capsys):
+    now = datetime.now(timezone.utc)
+    for bad in ("{not json", "[1, 2]"):
+        _setup(monkeypatch, tmp_path, {"a/a": _atom("a/a", [("v1", now)])}, ["a/a"])
+        (tmp_path / "state" / "releases.json").write_text(bad)
+        fetch_sources.releases()
+        cap = capsys.readouterr()
+        assert json.loads(cap.out) == []
+        assert "releases: state unreadable, reseeding" in cap.err
+        assert _state(tmp_path)["a/a"]
 
 
 def test_commit_state_moves_file(monkeypatch, tmp_path):

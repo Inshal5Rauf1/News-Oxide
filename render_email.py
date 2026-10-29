@@ -4,6 +4,7 @@ render_email.py: snapshot-brief renderer + MIME builder.
 
 Subcommands:
   trending|huggingface|hackernews|releases <data_json> <date> <out_html>   render a snapshot email
+  curated <curated_json> <date> <out_body_html> <out_full_html>           themed brief (body + attachment)
   heartbeat <date> <out_html>                                              all-empty heartbeat HTML
   eml <subject> <html_file> <to_csv> <out_path> [attach_path]              write RFC822 for gmail upload
 
@@ -187,6 +188,106 @@ def render_releases(data, date):
                 "".join(rows), f"{len(data)} releases · source: github.com releases.atom")
 
 
+# ---- Curated (themed) brief --------------------------------------------------
+def _curated_row(it):
+    gist, title, url = it.get("gist") or it.get("title") or "", it.get("title") or "", it.get("url") or ""
+    pills = " ".join(_gray_pill(k) for k in it.get("sources") or [])
+    main = esc(gist)
+    if url:
+        main = (f'<a href="{esc(url)}" style="color:{FG};text-decoration:none;font-size:13.5px;'
+                f'font-family:{SANS};">{main}</a>')
+    else:
+        main = f'<span style="color:{FG};font-size:13.5px;font-family:{SANS};">{main}</span>'
+    meta = _meta(esc(it.get("meta") or ""))
+    if it.get("hn_url"):
+        meta += (f' <a href="{esc(it["hn_url"])}" style="color:{MUTED};font-family:{MONO};'
+                 f'font-size:11px;text-decoration:none;">comments</a>')
+    sub = (f'<div style="color:{MUTED};font-family:{MONO};font-size:11px;margin-top:2px;">{esc(title)}</div>'
+           if title and title != gist else "")
+    return (f'<tr><td style="padding:8px 0;border-bottom:1px solid {BORDER};">'
+            f'<div>{pills} {main}</div><div style="margin-top:2px;">{meta}</div>{sub}</td></tr>')
+
+
+def _curated_line(text):
+    return (f'<tr><td style="padding:6px 0;border-bottom:1px solid {BORDER};">'
+            f'<span style="color:{MUTED};font-family:{MONO};font-size:11px;">{esc(text)}</span></td></tr>')
+
+
+def _curated_head(title, summary):
+    out = group_header(title)
+    if summary:
+        out += (f'<tr><td style="padding:6px 0;color:#c9d1d9;font-size:13px;font-family:{SANS};">'
+                f'{esc(summary)}</td></tr>')
+    return out
+
+
+def _curated_sections(cur):
+    """[(header, summary, [item, ...])] for the themed (or ungrouped) part."""
+    items = cur["items"]
+    if cur["stats"].get("grouped", True):
+        return [(t["title"].upper(), t.get("summary", ""), [items[i] for i in t["item_ids"] if i in items])
+                for t in cur["themes"]]
+    by = {}
+    for it in items.values():
+        by.setdefault((it.get("sources") or ["other"])[0], []).append(it)
+    order = [k for k in cur["stats"].get("sources", []) if k in by] + [k for k in by if k not in cur["stats"].get("sources", [])]
+    return [(f"{k.upper()} ({len(by[k])})", "", by[k]) for k in order]
+
+
+def _curated_also(cur):
+    """(header, grouped rows) for the ALSO TODAY block, or None."""
+    rest = [cur["items"][i] for i in cur.get("rest", []) if i in cur["items"]]
+    if not rest or not cur["stats"].get("grouped", True):
+        return None
+    by = {}
+    for it in rest:
+        by.setdefault((it.get("sources") or ["other"])[0], []).append(it)
+    rows = ""
+    for k, its in by.items():
+        rows += (f'<tr><td style="padding:8px 0 2px 0;color:{MUTED};font-family:{MONO};font-size:10px;'
+                 f'letter-spacing:1px;">{esc(k.upper())} ({len(its)})</td></tr>')
+        rows += "".join(_curated_row(it) for it in its)
+    return f"ALSO TODAY ({len(rest)})", rows, len(rest)
+
+
+def render_curated(cur, date, body_limit=95_000):
+    """Return (body_html, full_html). Body is cut at theme granularity to stay under
+    body_limit UTF-8 bytes (Gmail clips ~102KB); full is the attachment with everything."""
+    st = cur["stats"]
+    sub = f'{st["items_in"]} items from {len(st["sources"])} sources, {len(cur["themes"])} themes'
+    if not st.get("grouped", True):
+        sub += " · ungrouped"
+    hdr = _hdr("curated", "Daily Brief · Curated", date, sub)
+    footer = f"The complete brief is attached as curated-{date}.html"
+    secs, also = _curated_sections(cur), _curated_also(cur)
+
+    def doc(inner):
+        return _doc(hdr, inner, footer)
+
+    def stub(h, summary, n):
+        return _curated_head(h, summary) + _curated_line(f"{n} items, see attachment")
+
+    full_blocks = [_curated_head(h, sm) + "".join(_curated_row(i) for i in its) for h, sm, its in secs]
+    stub_blocks = [stub(h, sm, len(its)) for h, sm, its in secs]
+    also_full = group_header(also[0]) + also[1] if also else ""
+    also_stub = stub(also[0], "", also[2]) if also else ""
+    full = doc("".join(full_blocks) + also_full)
+
+    # Walk themes in order; a block is kept only if the body, with every later block
+    # reduced to its stub, still fits. Never cuts mid-row.
+    inner, cut = "", False
+    for k, block in enumerate(full_blocks):
+        tail = "".join(stub_blocks[k + 1:]) + also_stub
+        if not cut and len(doc(inner + block + tail).encode()) <= body_limit:
+            inner += block
+        else:
+            cut = True
+            inner += stub_blocks[k]
+    if also:
+        inner += also_full if not cut and len(doc(inner + also_full).encode()) <= body_limit else also_stub
+    return doc(inner), full
+
+
 # ---- heartbeat (all three snapshots empty) -----------------------------------
 def render_heartbeat(date):
     msg = ("All snapshot sources returned nothing this cycle. The brief ran "
@@ -228,7 +329,7 @@ def build_eml(subject, html_file, to_csv, out_path, attach=None):
 
 def main():
     if len(sys.argv) < 2:
-        sys.exit("usage: render_email.py trending|huggingface|hackernews|releases|heartbeat|eml ...")
+        sys.exit("usage: render_email.py trending|huggingface|hackernews|releases|curated|heartbeat|eml ...")
     cmd = sys.argv[1]
     if cmd in ("trending", "huggingface", "hackernews", "releases"):
         items_json, date, out_html = sys.argv[2:5]
@@ -238,6 +339,15 @@ def main():
               "hackernews": render_hackernews, "releases": render_releases}[cmd]
         with open(out_html, "w", encoding="utf-8") as f:
             f.write(fn(data, date))
+    elif cmd == "curated":
+        cur_json, date, out_body, out_full = sys.argv[2:6]
+        with open(cur_json, encoding="utf-8") as f:
+            cur = json.load(f)
+        body, full = render_curated(cur, date)
+        with open(out_body, "w", encoding="utf-8") as f:
+            f.write(body)
+        with open(out_full, "w", encoding="utf-8") as f:
+            f.write(full)
     elif cmd == "heartbeat":
         date, out_html = sys.argv[2:4]
         with open(out_html, "w", encoding="utf-8") as f:

@@ -50,7 +50,7 @@ def test_empty_url_renders_plain_gist():
 
 def _check_cut(cur, limit):
     body, _ = re_.render_curated(cur, "2026-10-29", body_limit=limit)
-    line = "20 items, see attachment"
+    line = f'{len(cur["themes"][0]["item_ids"])} items, see attachment'
     # floor: the smallest possible body, every theme reduced to header + summary + line
     floor = len(re_.render_curated(cur, "2026-10-29", body_limit=0)[0].encode())
     assert len(body.encode()) <= max(limit, floor)
@@ -58,7 +58,7 @@ def _check_cut(cur, limit):
     cut_seen = False
     for th in cur["themes"]:
         urls = [cur["items"][i]["url"] for i in th["item_ids"]]
-        present = [u in body for u in urls]
+        present = [f'href="{u}"' in body for u in urls]
         assert th["title"].upper() in body and th["summary"] in body
         if all(present):
             assert not cut_seen, "a complete theme follows a cut one"
@@ -123,3 +123,24 @@ def test_no_em_dash_curated():
     cur = _cur(3, 3, rest=3)
     for v in re_.render_curated(cur, "2026-10-29", body_limit=2000):
         assert chr(0x2014) not in v and "&mdash;" not in v
+
+
+def test_item_in_two_themes_and_rest_renders_once():
+    cur = _cur(2, 2, rest=0)
+    dup = cur["themes"][0]["item_ids"][0]
+    cur["themes"][1]["item_ids"].append(dup)
+    cur["rest"] = [dup]
+    _, full = re_.render_curated(cur, "2026-10-29")
+    for it in cur["items"].values():
+        assert full.count(f'href="{it["url"]}"') == 1
+    assert "ALSO TODAY" not in full
+
+
+def test_unplaced_item_falls_into_also_today():
+    cur = _cur(2, 2)
+    orphan = _item(99, src="trending")
+    cur["items"][orphan["id"]] = orphan
+    _, full = re_.render_curated(cur, "2026-10-29")
+    assert full.count(f'href="{orphan["url"]}"') == 1
+    assert full.index("ALSO TODAY (1)") < full.index(orphan["url"])
+    assert "TRENDING (1)" in full

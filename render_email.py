@@ -221,23 +221,36 @@ def _curated_head(title, summary):
     return out
 
 
-def _curated_sections(cur):
-    """[(header, summary, [item, ...])] for the themed (or ungrouped) part."""
+def _curated_plan(cur):
+    """([(header, summary, [item, ...])], also_items). Each item is placed once: first
+    placement wins, and items that no theme or rest list placed fall into ALSO TODAY."""
     items = cur["items"]
-    if cur["stats"].get("grouped", True):
-        return [(t["title"].upper(), t.get("summary", ""), [items[i] for i in t["item_ids"] if i in items])
-                for t in cur["themes"]]
-    by = {}
-    for it in items.values():
-        by.setdefault((it.get("sources") or ["other"])[0], []).append(it)
-    order = [k for k in cur["stats"].get("sources", []) if k in by] + [k for k in by if k not in cur["stats"].get("sources", [])]
-    return [(f"{k.upper()} ({len(by[k])})", "", by[k]) for k in order]
+    if not cur["stats"].get("grouped", True):
+        by = {}
+        for it in items.values():
+            by.setdefault((it.get("sources") or ["other"])[0], []).append(it)
+        known = cur["stats"].get("sources", [])
+        order = [k for k in known if k in by] + [k for k in by if k not in known]
+        return [(f"{k.upper()} ({len(by[k])})", "", by[k]) for k in order], []
+    placed, secs = set(), []
+    for t in cur["themes"]:
+        mine = []
+        for i in t["item_ids"]:
+            if i in items and i not in placed:
+                placed.add(i)
+                mine.append(items[i])
+        secs.append((t["title"].upper(), t.get("summary", ""), mine))
+    also = []
+    for i in list(cur.get("rest", [])) + list(items):
+        if i in items and i not in placed:
+            placed.add(i)
+            also.append(items[i])
+    return secs, also
 
 
-def _curated_also(cur):
-    """(header, grouped rows) for the ALSO TODAY block, or None."""
-    rest = [cur["items"][i] for i in cur.get("rest", []) if i in cur["items"]]
-    if not rest or not cur["stats"].get("grouped", True):
+def _curated_also(rest):
+    """(header, grouped rows, count) for the ALSO TODAY block, or None."""
+    if not rest:
         return None
     by = {}
     for it in rest:
@@ -259,13 +272,14 @@ def render_curated(cur, date, body_limit=95_000):
         sub += " · ungrouped"
     hdr = _hdr("curated", "Daily Brief · Curated", date, sub)
     footer = f"The complete brief is attached as curated-{date}.html"
-    secs, also = _curated_sections(cur), _curated_also(cur)
+    secs, rest = _curated_plan(cur)
+    also = _curated_also(rest)
 
     def doc(inner):
         return _doc(hdr, inner, footer)
 
     def stub(h, summary, n):
-        return _curated_head(h, summary) + _curated_line(f"{n} items, see attachment")
+        return _curated_head(h, summary) + (_curated_line(f"{n} items, see attachment") if n else "")
 
     full_blocks = [_curated_head(h, sm) + "".join(_curated_row(i) for i in its) for h, sm, its in secs]
     stub_blocks = [stub(h, sm, len(its)) for h, sm, its in secs]

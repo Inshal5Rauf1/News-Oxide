@@ -1,0 +1,7 @@
+# Repos checked for new releases, in addition to your GitHub stars.
+k3s-io/k3s
+odoo/odoo
+instructure/canvas-lms
+h5p/h5p-php-library
+ucfopen/Materia
+RSamaium/RPG-JS

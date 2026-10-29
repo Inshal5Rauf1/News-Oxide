@@ -8,10 +8,13 @@ fetch_sources.py: deterministic snapshot sources (no API keys, no LLM).
   hnbest       top HN stories from the last 24h, by points
   feeds        curated RSS/Atom feeds from feeds.opml (last 26h, plus unseen undated items)
   reddit       hot posts from subreddits.txt (RSS; stickied posts not detectable)
+  releases     new GitHub releases (last 7 days) for releases.txt + starred repos
+  commit-state <feeds|releases>  promote tmp/<key>.state.json into state/
 Each prints a JSON snapshot to stdout; render_email.py renders it as-is.
 """
 import sys, gzip, io, json, os, re, time, urllib.error, urllib.parse, urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from html import unescape
 from datetime import datetime, timedelta, timezone
 
@@ -22,6 +25,7 @@ FEEDS_OPML = os.path.join(_HERE, "feeds.opml")
 STATE_DIR = os.path.join(_HERE, "state")
 TMP_DIR = os.path.join(_HERE, "tmp")
 SUBREDDITS_TXT = os.path.join(_HERE, "subreddits.txt")
+RELEASES_TXT = os.path.join(_HERE, "releases.txt")
 REDDIT_UA = "news-oxide/1.0 (personal daily brief; by u/inshal)"
 REDDIT_PAUSE = 10.0                    # seconds between subreddit requests
 
@@ -299,12 +303,106 @@ def reddit():
     if subs and failed == len(subs):
         raise SystemExit(3)
 
+def _starred():
+    """owner/repo of the user's starred repos (up to 3 pages of 100); [] and a stderr line on failure."""
+    user = os.environ.get("GITHUB_USER", "Inshal5Rauf1")
+    token = os.environ.get("GITHUB_TOKEN")
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    repos = []
+    try:
+        for page in (1, 2, 3):
+            url = f"https://api.github.com/users/{user}/starred?per_page=100&page={page}"
+            rows = json.loads(get(url, headers=headers))
+            if not rows:
+                break
+            repos += [r["full_name"] for r in rows if r.get("full_name")]
+    except Exception as e:
+        print(f"releases: starred fetch failed: {' '.join(str(e).split())}", file=sys.stderr)
+        return []
+    return repos
+
+
+def _release_entries(repo):
+    text = get(f"https://github.com/{repo}/releases.atom")
+    items = feedparse.parse_feed(text)
+    if not items and "<feed" not in text:      # a valid feed with no releases yet is not a failure
+        raise ValueError("no entries parsed")
+    return items
+
+
+def releases():
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=7)
+    try:
+        with open(RELEASES_TXT, encoding="utf-8") as f:
+            listed = [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
+    except OSError:
+        listed = []
+    repos = sorted(set(listed) | set(_starred()))
+    state_path = os.path.join(STATE_DIR, "releases.json")
+    first_run = not os.path.exists(state_path)
+    try:
+        with open(state_path) as f:
+            seen = json.load(f)
+    except (OSError, ValueError):
+        seen = {}
+
+    def fetch(repo):
+        try:
+            return _release_entries(repo)
+        except Exception as e:
+            print(f"releases: {repo} failed: {' '.join(str(e).split())}", file=sys.stderr)
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(fetch, repos))     # map keeps the sorted repo order
+
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    out, state, failed = [], {}, 0
+    for repo, items in zip(repos, results):
+        if items is None:
+            failed += 1
+            continue
+        items.sort(key=lambda it: feedparse.parse_date(it["published"]) or epoch, reverse=True)
+        state[repo] = [it["id"] for it in items][:20]
+        known = set(seen.get(repo, []))
+        for it in items:
+            when = feedparse.parse_date(it["published"])
+            if first_run or it["id"] in known or when is None or when < cutoff:
+                continue
+            out.append({"repo": repo, "tag": urllib.parse.unquote(it["url"].rstrip("/").rsplit("/", 1)[-1]),
+                        "name": it["title"], "url": it["url"], "published": it["published"],
+                        "notes": it["summary"][:300]})
+    out.sort(key=lambda r: feedparse.parse_date(r["published"]), reverse=True)
+    os.makedirs(TMP_DIR, exist_ok=True)
+    with open(os.path.join(TMP_DIR, "releases.state.json"), "w") as f:
+        json.dump(state, f)
+    print(json.dumps(out))
+    if repos and failed == len(repos):
+        raise SystemExit(3)
+
+
+_STATE_FILES = {"feeds": "feeds_seen.json", "releases": "releases.json"}
+
+
+def commit_state(key):
+    """Promote tmp/<key>.state.json to its state/ file; silent no-op if it is absent."""
+    if key not in _STATE_FILES:
+        sys.exit("usage: fetch_sources.py commit-state feeds|releases")
+    src = os.path.join(TMP_DIR, f"{key}.state.json")
+    if not os.path.exists(src):
+        return
+    os.makedirs(STATE_DIR, exist_ok=True)
+    os.replace(src, os.path.join(STATE_DIR, _STATE_FILES[key]))
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     dispatch = {"trending": trending, "huggingface": huggingface, "hackernews": hackernews,
                 "newrepos": newrepos, "hnbest": hnbest, "feeds": feeds,
-                "reddit": reddit}
-    if cmd in dispatch:
+                "reddit": reddit, "releases": releases}
+    if cmd == "commit-state":
+        commit_state(sys.argv[2] if len(sys.argv) > 2 else "")
+    elif cmd in dispatch:
         dispatch[cmd]()
     else:
-        sys.exit("usage: fetch_sources.py trending|huggingface|hackernews|newrepos|hnbest|feeds|reddit")
+        sys.exit("usage: fetch_sources.py trending|huggingface|hackernews|newrepos|hnbest|feeds|reddit|releases|commit-state <feeds|releases>")

@@ -1,0 +1,8 @@
+sent/
+tmp/
+guard/
+cron.log
+*.eml
+__pycache__/
+config.env
+.superpowers/

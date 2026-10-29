@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""
+fetch_sources.py — deterministic snapshot sources (no API keys, no LLM).
+  trending     GitHub trending repos (Trendshift mirror: daily/weekly/monthly/yearly)
+  huggingface  trending models / datasets / spaces + daily papers (HF API)
+  hackernews   top front-page stories (HN Algolia API)
+Each prints a JSON snapshot to stdout; render_email.py renders it as-is.
+"""
+import sys, json, re, urllib.request
+
+UA = {"User-Agent": "Mozilla/5.0 (daily-brief research script)"}
+MAX_BYTES = 8 * 1024 * 1024            # cap response size as a blowup defense
+
+
+def get(url):
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=40) as r:
+        return r.read(MAX_BYTES).decode("utf-8", "replace")
+
+
+def _unescape_rsc(html):
+    """Concatenate Next.js self.__next_f.push([1,"..."]) string payloads, unescaped."""
+    out = []
+    for p in re.findall(r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)', html, re.S):
+        try:
+            out.append(json.loads(p))
+        except Exception:
+            pass
+    return "".join(out)
+
+
+def _extract_initialdata(text):
+    """Find "initialData":[ ... ] and return the parsed JSON array (bracket-matched)."""
+    idx = text.find('"initialData":')
+    if idx == -1:
+        return []
+    start = text.find('[', idx)
+    if start == -1:
+        return []
+    depth = 0; instr = False; esc = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if esc:
+            esc = False
+        elif c == '\\':
+            esc = True
+        elif c == '"':
+            instr = not instr
+        elif not instr:
+            if c == '[':
+                depth += 1
+            elif c == ']':
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except Exception:
+                        return []
+    return []
+
+
+def trending():
+    periods = {
+        "daily": "https://trendshift.io/",
+        "weekly": "https://trendshift.io/weekly",
+        "monthly": "https://trendshift.io/monthly",
+        "yearly": "https://trendshift.io/yearly",
+    }
+    out = {}
+    for name, url in periods.items():
+        repos = []
+        try:
+            data = _extract_initialdata(_unescape_rsc(get(url)))
+            for d in data:
+                fn = d.get("full_name")
+                if not fn:
+                    continue
+                repos.append({
+                    "rank": d.get("rank"),
+                    "full_name": fn,
+                    "url": f"https://github.com/{fn}",
+                    "description": d.get("repository_description") or "",
+                    "language": d.get("repository_language") or d.get("language") or "",
+                    "stars": d.get("repository_stars"),
+                    "stars_gained": d.get("repository_stars_gained"),
+                    "tags": [t.get("display_name") for t in (d.get("tags") or []) if t.get("display_name")][:4],
+                })
+        except Exception:
+            repos = []   # empty on failure → that period just shows 0, no fake item
+        out[name] = repos
+    print(json.dumps(out))
+
+
+def _hf(path):
+    return json.loads(get("https://huggingface.co/api/" + path))
+
+
+def huggingface():
+    out = {"models": [], "datasets": [], "spaces": [], "papers": []}
+    try:
+        for m in _hf("models?sort=trendingScore&limit=20"):
+            out["models"].append({"id": m.get("id"), "url": "https://huggingface.co/" + m.get("id", ""),
+                                  "likes": m.get("likes"), "downloads": m.get("downloads"),
+                                  "pipeline_tag": m.get("pipeline_tag") or ""})
+    except Exception:
+        out["models"] = []   # empty on failure → skipped, not an empty-section email
+    try:
+        for d in _hf("datasets?sort=trendingScore&limit=12"):
+            out["datasets"].append({"id": d.get("id"), "url": "https://huggingface.co/datasets/" + d.get("id", ""),
+                                    "likes": d.get("likes"), "downloads": d.get("downloads")})
+    except Exception:
+        pass
+    try:
+        for s in _hf("spaces?sort=trendingScore&limit=12"):
+            out["spaces"].append({"id": s.get("id"), "url": "https://huggingface.co/spaces/" + s.get("id", ""),
+                                  "likes": s.get("likes"), "sdk": s.get("sdk") or ""})
+    except Exception:
+        pass
+    try:
+        for p in _hf("daily_papers?limit=15"):
+            paper = p.get("paper", {}) if isinstance(p.get("paper"), dict) else {}
+            pid = paper.get("id") or p.get("id") or ""
+            authors = paper.get("authors") or p.get("authors") or []
+            names = ", ".join(a.get("name", "") for a in authors[:4] if isinstance(a, dict))
+            out["papers"].append({"title": p.get("title") or paper.get("title", ""),
+                                  "url": "https://huggingface.co/papers/" + pid,
+                                  "upvotes": paper.get("upvotes") or p.get("upvotes"), "authors": names})
+    except Exception:
+        pass
+    print(json.dumps(out))
+
+
+def hackernews():
+    out = []
+    try:
+        d = json.loads(get("https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=30"))
+        for h in d.get("hits", []):
+            oid = h.get("objectID", "")
+            out.append({"title": h.get("title"),
+                        "url": h.get("url") or f"https://news.ycombinator.com/item?id={oid}",
+                        "points": h.get("points"), "comments": h.get("num_comments"),
+                        "hn_url": f"https://news.ycombinator.com/item?id={oid}", "author": h.get("author")})
+    except Exception:
+        out = []   # emit empty on failure so the topic is skipped, not sent as an empty email
+    print(json.dumps(out))
+
+
+if __name__ == "__main__":
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    dispatch = {"trending": trending, "huggingface": huggingface, "hackernews": hackernews}
+    if cmd in dispatch:
+        dispatch[cmd]()
+    else:
+        sys.exit("usage: fetch_sources.py trending|huggingface|hackernews")

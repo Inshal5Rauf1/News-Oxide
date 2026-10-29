@@ -2,6 +2,7 @@ import json, os, sys
 
 import curate
 
+EXPECTED_ITEMS = 36
 FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "day")
 
 
@@ -81,17 +82,48 @@ def test_normalise_meta_has_no_em_dash_and_shape():
         assert i["title"]
 
 
+def _fixture_rows(day):
+    rows = []
+    for k, d in day.items():
+        for r in ([r for v in d.values() for r in v] if isinstance(d, dict) else d):
+            rows.append(r)
+    return rows
+
+
 def test_normalise_counts_match_fixture():
     day = _day()
-    urls = []
-    for k, d in day.items():
-        rows = [r for v in d.values() for r in v] if isinstance(d, dict) else d
-        for r in rows:
-            u = r["url"]
-            urls.append(curate.canonical_url(u))
+    rows = _fixture_rows(day)
     items = curate.normalise(day)
-    assert len(items) == len(set(urls))
-    assert len({i["id"] for i in items}) == len(items)
+    ids = [i["id"] for i in items]
+    assert len(set(ids)) == len(ids)
+    # every fixture row lands in exactly one item, none vanish
+    hits = [sum(1 for i in items if curate.item_id(r["url"]) == i["id"]) for r in rows]
+    assert hits == [1] * len(rows)
+    assert sum(sum(1 for r in rows if curate.item_id(r["url"]) == i["id"]) for i in items) == len(rows)
+    assert len(items) == EXPECTED_ITEMS
+
+
+def test_normalise_keeps_urlless_rows(capsys):
+    day = {"hackernews": [{"title": "Ask HN: x", "url": "", "points": 5, "comments": 2,
+                           "hn_url": "https://news.ycombinator.com/item?id=9"}],
+           "feeds": [{"title": "No link", "url": None, "feed": "F", "published": ""}],
+           "hnbest": [{"title": "Ask HN: x", "url": None, "points": 1, "comments": 1, "hn_url": None}]}
+    items = curate.normalise(day)
+    assert len(items) == 3
+    assert [i["url"] for i in items] == ["https://news.ycombinator.com/item?id=9", "", ""]
+    assert items[1]["id"] == curate.item_id_for_text("hnbest", "Ask HN: x")
+    assert items[2]["id"] == curate.item_id_for_text("feeds", "No link")
+    assert len({i["id"] for i in items}) == 3
+    assert capsys.readouterr().err.count("row without url kept") == 3
+
+
+def test_urlless_trending_row_ok():
+    day = {"trending": {"daily": [{"full_name": "a/b", "url": None, "stars": 1, "stars_gained": 1}]}}
+    assert len(curate.normalise(day)) == 1
+
+
+def test_canonical_url_malformed_port():
+    assert curate.canonical_url("http://h.example:abc/p/") == "https://h.example/p"
 
 
 def test_normalise_order_follows_key_order():

@@ -17,8 +17,11 @@ def canonical_url(url):
     host = (p.hostname or "").lower()
     if host.startswith("www."):
         host = host[4:]
-    if p.port:
-        host += ":%d" % p.port
+    try:
+        if p.port:
+            host += ":%d" % p.port
+    except ValueError:
+        pass                           # malformed port: fall back to no port
     q = [(k, v) for k, v in urllib.parse.parse_qsl(p.query, keep_blank_values=True)
          if not k.lower().startswith("utm_") and k.lower() not in DROP_PARAMS]
     path = p.path[:-1] if p.path.endswith("/") else p.path
@@ -27,6 +30,10 @@ def canonical_url(url):
 
 def item_id(url):
     return hashlib.sha1(canonical_url(url).encode()).hexdigest()[:12]
+
+
+def item_id_for_text(key, title):
+    return hashlib.sha1(("%s:%s" % (key, title)).encode()).hexdigest()[:12]
 
 
 def load_day(sent_dir, date):
@@ -61,7 +68,7 @@ def _trending(d):
     seen = {}
     for period in PERIODS:
         for r in d.get(period) or []:
-            key = canonical_url(r.get("url"))
+            key = canonical_url(r["url"]) if r.get("url") else ("nourl", len(seen))
             if key in seen:
                 seen[key]["periods"].append(period)
             else:
@@ -119,13 +126,19 @@ def normalise(day):
         if key not in day:
             continue
         for r in _ROWS[key](day[key]):
-            if not r["url"]:
-                continue
-            iid = item_id(r["url"])
-            it = items.get(iid)
+            url = (r["url"] or "").strip()
+            if url:
+                iid = item_id(url)
+                slot = iid
+            else:
+                print("curate: %s row without url kept: %s" % (key, (r["title"] or "")[:60]),
+                      file=sys.stderr)
+                iid = item_id_for_text(key, r["title"] or "")
+                slot = (iid, len(items))         # never merged with anything
+                url = r["hn_url"] or ""
+            it = items.get(slot)
             if it is None:
-                it = items[iid] = dict(id=iid, sources=[], title="", url=r["url"].strip(),
-                                       meta="", hn_url=None)
+                it = items[slot] = dict(id=iid, sources=[], title="", url=url, meta="", hn_url=None)
             if key not in it["sources"]:
                 it["sources"].append(key)
             it["title"] = it["title"] or (r["title"] or "")

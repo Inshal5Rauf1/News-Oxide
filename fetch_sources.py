@@ -136,16 +136,20 @@ def huggingface():
     print(json.dumps(out))
 
 
+def _hn_row(h):
+    """One HN Algolia hit as the six-key row shared by hackernews() and hnbest()."""
+    oid = h.get("objectID", "")
+    return {"title": h.get("title"),
+            "url": h.get("url") or f"https://news.ycombinator.com/item?id={oid}",
+            "points": h.get("points"), "comments": h.get("num_comments"),
+            "hn_url": f"https://news.ycombinator.com/item?id={oid}", "author": h.get("author")}
+
+
 def hackernews():
     out = []
     try:
         d = json.loads(get("https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=30"))
-        for h in d.get("hits", []):
-            oid = h.get("objectID", "")
-            out.append({"title": h.get("title"),
-                        "url": h.get("url") or f"https://news.ycombinator.com/item?id={oid}",
-                        "points": h.get("points"), "comments": h.get("num_comments"),
-                        "hn_url": f"https://news.ycombinator.com/item?id={oid}", "author": h.get("author")})
+        out = [_hn_row(h) for h in d.get("hits", [])]
     except Exception:
         out = []   # emit empty on failure so the topic is skipped, not sent as an empty email
     print(json.dumps(out))
@@ -175,12 +179,7 @@ def hnbest():
         url = f"https://hn.algolia.com/api/v1/search?tags=story&numericFilters=created_at_i>{epoch}&hitsPerPage=50"
         hits = json.loads(get(url)).get("hits", [])
         hits.sort(key=lambda h: h.get("points") or 0, reverse=True)
-        for h in hits:
-            oid = h.get("objectID", "")
-            out.append({"title": h.get("title"),
-                        "url": h.get("url") or f"https://news.ycombinator.com/item?id={oid}",
-                        "points": h.get("points"), "comments": h.get("num_comments"),
-                        "hn_url": f"https://news.ycombinator.com/item?id={oid}", "author": h.get("author")})
+        out = [_hn_row(h) for h in hits]
     except Exception:
         out = []
     print(json.dumps(out))

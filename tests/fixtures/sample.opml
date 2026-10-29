@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head><title>Feeds</title></head>
+  <body>
+    <outline text="AI" title="AI">
+      <outline type="rss" text="Blog One" title="Blog One" xmlUrl="https://one.example/feed.xml"/>
+      <outline type="rss" text="Blog Two" xmlUrl="https://two.example/atom"/>
+    </outline>
+  </body>
+</opml>

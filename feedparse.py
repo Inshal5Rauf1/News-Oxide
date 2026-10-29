@@ -35,9 +35,10 @@ def _name(el):
 
 
 def _text(el, *names):
-    for c in el:
-        if _name(c) in names and (c.text or "").strip():
-            return c.text.strip()
+    for n in names:                    # priority order, not document order
+        for c in el:
+            if _name(c) == n and (c.text or "").strip():
+                return c.text.strip()
     return ""
 
 

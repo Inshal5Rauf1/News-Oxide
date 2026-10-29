@@ -53,3 +53,12 @@ def test_parse_date_variants():
     assert c.hour == 7
     assert feedparse.parse_date("junk") is None
     assert feedparse.parse_date("") is None
+
+
+def test_priority_order_not_document_order():
+    xml = ('<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>t</title>'
+           '<updated>2026-10-21T12:00:00Z</updated><content>c</content>'
+           '<published>2026-10-20T12:00:00Z</published><summary>s</summary></entry></feed>')
+    it = feedparse.parse_feed(xml)[0]
+    assert it["published"].startswith("2026-10-20")
+    assert it["summary"] == "s"

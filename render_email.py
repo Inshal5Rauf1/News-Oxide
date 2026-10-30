@@ -34,6 +34,20 @@ def esc(s):
     return html.escape(str(s if s is not None else ""))
 
 
+def safe_href(url):
+    """Only http(s) URLs become links; anything else (javascript:, data:, junk) is not linked."""
+    u = str(url or "").strip()
+    return u if u.lower().startswith(("http://", "https://")) else ""
+
+
+def link(url, style, inner):
+    """<a> for a safe URL, else the same text as a plain span. inner is already escaped."""
+    u = safe_href(url)
+    if u:
+        return f'<a href="{esc(u)}" style="{style}">{inner}</a>'
+    return f'<span style="{style}">{inner}</span>'
+
+
 def pill(text, fg, bg, bd):
     return (f'<span style="font-family:{MONO};font-size:10px;font-weight:700;color:{fg};'
             f'background:{bg};border:1px solid {bd};padding:2px 7px;border-radius:4px;'
@@ -84,7 +98,6 @@ def _gray_pill(text):
 # ---- GitHub Trending ---------------------------------------------------------
 def render_repo_row(r):
     name = esc(r.get("full_name", ""))
-    url = esc(r.get("url", "#"))
     rank = esc(r.get("rank", ""))
     lang = r.get("language") or ""
     stars, gained = r.get("stars"), r.get("stars_gained")
@@ -98,7 +111,7 @@ def render_repo_row(r):
     return f'''
     <tr><td style="padding:9px 0;border-bottom:1px solid {BORDER};">
       <div><span style="color:{MUTED};font-family:{MONO};font-size:11px;">#{rank}</span>
-        <a href="{url}" style="color:{LINK};text-decoration:none;font-weight:700;font-size:14px;font-family:{SANS};">{name}</a>
+        {link(r.get("url"), f"color:{LINK};text-decoration:none;font-weight:700;font-size:14px;font-family:{SANS};", name)}
         &nbsp;{lang_pill} &nbsp;{star_txt}</div>
       <div style="color:#c9d1d9;font-size:12px;margin-top:2px;font-family:{SANS};">{esc(r.get("description",""))}</div>
       {f'<div style="margin-top:3px;">{tags}</div>' if tags else ''}
@@ -144,7 +157,8 @@ def render_huggingface(data, date):
                 tag = it.get("pipeline_tag") or it.get("sdk") or ""
                 extra = f' {_gray_pill(tag)}' if tag else ""
             rows.append(f'<tr><td style="padding:7px 0;border-bottom:1px solid {BORDER};">'
-                        f'<a href="{esc(url)}" style="color:{LINK};text-decoration:none;font-weight:600;font-size:13.5px;font-family:{SANS};">{esc(name)}</a> {meta}{extra}</td></tr>')
+                        + link(url, f"color:{LINK};text-decoration:none;font-weight:600;font-size:13.5px;font-family:{SANS};", esc(name))
+                        + f' {meta}{extra}</td></tr>')
     total = sum(len(data.get(k, []) or []) for k, _ in secs)
     return _doc(_hdr("huggingface", "Hugging Face", date, "trending models &middot; datasets &middot; spaces &middot; daily papers"),
                 "".join(rows), f"{total} items · source: huggingface.co · saved locally")
@@ -156,14 +170,14 @@ def render_hackernews(data, date):
     for i, h in enumerate(data, 1):
         if "error" in h:
             continue
-        title, url = esc(h.get("title", "")), esc(h.get("url", "#"))
-        hn = esc(h.get("hn_url", "#"))
+        title = esc(h.get("title", ""))
         meta = (f'{_meta(str(h.get("points") or 0)+" pts")} &middot; '
-                f'<a href="{hn}" style="color:{MUTED};font-family:{MONO};font-size:11px;text-decoration:none;">{h.get("comments") or 0} comments</a>')
+                + link(h.get("hn_url"), f"color:{MUTED};font-family:{MONO};font-size:11px;text-decoration:none;",
+                       f'{esc(h.get("comments") or 0)} comments'))
         rows.append(f'<tr><td style="padding:8px 0;border-bottom:1px solid {BORDER};">'
                     f'<span style="color:{MUTED};font-family:{MONO};font-size:11px;">#{i}</span> '
-                    f'<a href="{url}" style="color:{LINK};text-decoration:none;font-weight:600;font-size:14px;font-family:{SANS};">{title}</a>'
-                    f'<div style="margin-top:2px;">{meta}</div></td></tr>')
+                    + link(h.get("url"), f"color:{LINK};text-decoration:none;font-weight:600;font-size:14px;font-family:{SANS};", title)
+                    + f'<div style="margin-top:2px;">{meta}</div></td></tr>')
     return _doc(_hdr("hacker-news", "Hacker News", date, "top front-page stories · all topics"),
                 "".join(rows), f"{len(data)} stories · source: news.ycombinator.com")
 
@@ -171,12 +185,11 @@ def render_hackernews(data, date):
 # ---- GitHub Releases ---------------------------------------------------------
 def render_release_row(r):
     repo = esc(r.get("repo", ""))
-    url = esc(r.get("url", "#"))
     tag = r.get("tag") or ""
     tag_pill = f' {_gray_pill(tag)}' if tag else ""
     return (f'<tr><td style="padding:9px 0;border-bottom:1px solid {BORDER};">'
-            f'<div><a href="{url}" style="color:{LINK};text-decoration:none;font-weight:700;font-size:14px;font-family:{SANS};">{repo}</a>'
-            f'&nbsp;{tag_pill} &nbsp;{_meta(esc((r.get("published") or "")[:10]))}</div>'
+            '<div>' + link(r.get("url"), f"color:{LINK};text-decoration:none;font-weight:700;font-size:14px;font-family:{SANS};", repo)
+            + f'&nbsp;{tag_pill} &nbsp;{_meta(esc((r.get("published") or "")[:10]))}</div>'
             f'<div style="color:#c9d1d9;font-size:12px;margin-top:2px;font-family:{SANS};">{esc(r.get("notes", ""))}</div>'
             f'</td></tr>')
 
@@ -193,15 +206,14 @@ def _curated_row(it):
     gist, title, url = it.get("gist") or it.get("title") or "", it.get("title") or "", it.get("url") or ""
     pills = " ".join(_gray_pill(k) for k in it.get("sources") or [])
     main = esc(gist)
-    if url:
-        main = (f'<a href="{esc(url)}" style="color:{FG};text-decoration:none;font-size:13.5px;'
-                f'font-family:{SANS};">{main}</a>')
+    if safe_href(url):
+        main = link(url, f"color:{FG};text-decoration:none;font-size:13.5px;font-family:{SANS};", main)
     else:
         main = f'<span style="color:{FG};font-size:13.5px;font-family:{SANS};">{main}</span>'
     meta = _meta(esc(it.get("meta") or ""))
-    if it.get("hn_url"):
-        meta += (f' <a href="{esc(it["hn_url"])}" style="color:{MUTED};font-family:{MONO};'
-                 f'font-size:11px;text-decoration:none;">comments</a>')
+    if safe_href(it.get("hn_url")):
+        meta += " " + link(it["hn_url"], f"color:{MUTED};font-family:{MONO};font-size:11px;text-decoration:none;",
+                           "comments")
     sub = (f'<div style="color:{MUTED};font-family:{MONO};font-size:11px;margin-top:2px;">{esc(title)}</div>'
            if title and title != gist else "")
     return (f'<tr><td style="padding:8px 0;border-bottom:1px solid {BORDER};">'

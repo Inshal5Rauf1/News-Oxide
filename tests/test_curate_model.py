@@ -156,7 +156,7 @@ def test_run_probe_false_skips_model_and_still_writes(tmp_path):
     with open(os.path.join(sent, DATE + "-curated.json")) as f:
         assert json.load(f) == out
     assert out["stats"] == {"items_in": 36, "items_placed": 36, "sources": curate.KEYS,
-                            "grouped": False, "probe_ok": False}
+                            "grouped": False, "probe_ok": False, "themes_skipped": False}
     assert out["themes"] == [] and len(out["rest"]) == 36
     assert all(i["gist"] == i["title"] and i["tags"] == [] for i in out["items"].values())
     assert set(out["rest"]) == set(out["items"])
@@ -196,10 +196,69 @@ def test_run_writes_curated_json_counts_match(tmp_path):
     assert out["date"] == DATE and os.path.isdir(tmp_path / "tmp")
     assert out["stats"] == {"items_in": n, "items_placed": n,
                             "sources": [k for k in curate.KEYS if k != "reddit"],
-                            "grouped": True, "probe_ok": True}
+                            "grouped": True, "probe_ok": True, "themes_skipped": False}
     assert [t["title"] for t in out["themes"]] == ["First four"]
     assert len(out["themes"][0]["item_ids"]) + len(out["rest"]) == n
     assert all(i["gist"] == "About " + iid for iid, i in out["items"].items())
+
+
+def test_run_skips_themes_when_out_of_time(tmp_path, capsys):
+    sent = _day_dir(tmp_path)
+    clock = iter([0, curate.CURATE_BUDGET - curate.THEMES_RESERVE + 1])
+    models = []
+
+    def ask(model, prompt, timeout, schema=None):
+        models.append(model)
+        if schema is curate.GIST_SCHEMA:
+            return {"items": [dict(id=b["id"], gist="G " + b["id"], tags=[]) for b in _batch(prompt)]}
+        raise AssertionError("themes must not run when out of time")
+
+    out = curate.run(DATE, sent, str(tmp_path / "tmp"), ask=ask, probe=lambda: True,
+                     now=lambda: next(clock))
+    assert "curate: themes skipped, out of time" in capsys.readouterr().err
+    assert "sonnet" not in models
+    st = out["stats"]
+    assert st["themes_skipped"] is True and st["grouped"] is False and st["probe_ok"] is True
+    assert out["themes"] == [] and set(out["rest"]) == set(out["items"])
+    assert all(i["gist"] == "G " + iid for iid, i in out["items"].items())
+    assert curate.placement_ok(out)
+
+
+def test_run_runs_themes_with_time_left(tmp_path):
+    sent = _day_dir(tmp_path)
+    clock = iter([0, curate.CURATE_BUDGET - curate.THEMES_RESERVE - 1])
+    models = []
+
+    def ask(model, prompt, timeout, schema=None):
+        models.append(model)
+        ids = [b["id"] for b in _batch(prompt)]
+        if schema is curate.GIST_SCHEMA:
+            return {"items": [dict(id=i, gist="G", tags=[]) for i in ids]}
+        return {"themes": [{"title": "T", "summary": "S", "item_ids": ids[:2]}], "rest": ids[2:]}
+
+    out = curate.run(DATE, sent, str(tmp_path / "tmp"), ask=ask, probe=lambda: True,
+                     now=lambda: next(clock))
+    assert "sonnet" in models and out["stats"]["themes_skipped"] is False
+    assert out["stats"]["grouped"] is True
+
+
+def test_run_writes_titles_fallback_before_model_passes(tmp_path, monkeypatch):
+    import pytest
+    sent = _day_dir(tmp_path)
+
+    def boom(items, ask):
+        raise RuntimeError("killed mid-gists")
+
+    monkeypatch.setattr(curate, "gists", boom)
+    with pytest.raises(RuntimeError):
+        curate.run(DATE, sent, str(tmp_path / "tmp"), ask=None, probe=lambda: True)
+    with open(os.path.join(sent, DATE + "-curated.json")) as f:
+        fb = json.load(f)
+    assert fb["stats"]["items_in"] == 36 and fb["stats"]["grouped"] is False
+    assert fb["stats"]["themes_skipped"] is False and fb["themes"] == []
+    assert set(fb["rest"]) == set(fb["items"])
+    assert all(i["gist"] == i["title"] for i in fb["items"].values())
+    assert curate.placement_ok(fb)
 
 
 def test_cli_no_model_and_usage(tmp_path):

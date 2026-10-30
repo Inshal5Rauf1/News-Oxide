@@ -26,13 +26,22 @@ def test_ask_argv_has_no_tools_and_no_mcp():
     calls = []
     claude_cli.ask("haiku", "hi", 5, runner=_runner(_cp(_result(result="x")), calls))
     argv, kw = calls[0]
-    assert argv[1:3] == ["-p", "hi"]
+    assert argv[1:3] == ["-p", "--model"] and "hi" not in argv
+    assert kw["input"] == "hi"
     assert argv[argv.index("--tools") + 1] == ""
     assert "--strict-mcp-config" in argv
     assert argv[argv.index("--mcp-config") + 1] == '{"mcpServers":{}}'
     assert "--no-session-persistence" in argv and "--json-schema" not in argv
     assert set(kw["env"]) <= {"HOME", "PATH", "TERM"}
     assert kw["timeout"] == 5
+
+
+def test_ask_large_prompt_goes_on_stdin():
+    calls = []
+    big = "x" * 200_000
+    claude_cli.ask("sonnet", big, 5, runner=_runner(_cp(_result(result="x")), calls))
+    argv, kw = calls[0]
+    assert kw["input"] == big and all(len(a) < 131072 for a in argv)
 
 
 def test_ask_returns_result_string():

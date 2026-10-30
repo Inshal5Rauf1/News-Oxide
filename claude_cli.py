@@ -39,14 +39,16 @@ def parse_json_text(text):
 
 def ask(model, prompt, timeout, schema=None, runner=subprocess.run):
     """One headless call. Returns str (no schema), parsed JSON (schema), or None on any failure."""
-    argv = [CLAUDE_BIN, "-p", prompt, "--model", model, "--output-format", "json",
+    # The prompt goes on stdin: a single argv element is capped at 128 KiB on Linux (E2BIG).
+    argv = [CLAUDE_BIN, "-p", "--model", model, "--output-format", "json",
             "--no-session-persistence", "--tools", "", "--strict-mcp-config",
             "--mcp-config", '{"mcpServers":{}}']
     if schema is not None:
         argv += ["--json-schema", json.dumps(schema)]
     env = {"HOME": os.environ["HOME"], "PATH": os.environ.get("PATH", ""), "TERM": "dumb"}
     try:
-        p = runner(argv, capture_output=True, text=True, timeout=timeout, env=env)
+        p = runner(argv, input=prompt, capture_output=True, text=True, timeout=timeout,
+                   env=env)
     except subprocess.TimeoutExpired:
         _fail(f"timeout after {timeout}s")
         return None

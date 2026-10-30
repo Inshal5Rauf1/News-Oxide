@@ -65,13 +65,19 @@ def test_newrepos_sends_bearer_when_token_set(monkeypatch, capsys):
     assert seen["headers"] == {"Authorization": "Bearer tok123"}
 
 
-def test_newrepos_failure_prints_empty_list(monkeypatch, capsys):
+def test_newrepos_failure_prints_empty_list_and_exits_3(monkeypatch, capsys):
+    import pytest
+
     def boom(url, headers=None):
         raise OSError("network down")
 
     monkeypatch.setattr(fetch_sources, "get", boom)
-    fetch_sources.newrepos()
-    assert json.loads(capsys.readouterr().out) == []
+    with pytest.raises(SystemExit) as e:
+        fetch_sources.newrepos()
+    assert e.value.code == 3
+    cap = capsys.readouterr()
+    assert json.loads(cap.out) == []
+    assert "newrepos: fetch failed: network down" in cap.err
 
 
 def test_newrepos_caps_at_100(monkeypatch, capsys):
@@ -112,10 +118,16 @@ def test_hnbest_epoch_is_24h_ago(monkeypatch, capsys):
     assert now - 86400 - 60 <= epoch <= now - 86400 + 60
 
 
-def test_hnbest_failure_prints_empty_list(monkeypatch, capsys):
+def test_hnbest_failure_prints_empty_list_and_exits_3(monkeypatch, capsys):
+    import pytest
+
     def boom(url, headers=None):
         raise OSError("network down")
 
     monkeypatch.setattr(fetch_sources, "get", boom)
-    fetch_sources.hnbest()
-    assert json.loads(capsys.readouterr().out) == []
+    with pytest.raises(SystemExit) as e:
+        fetch_sources.hnbest()
+    assert e.value.code == 3
+    cap = capsys.readouterr()
+    assert json.loads(cap.out) == []
+    assert "hnbest: fetch failed: network down" in cap.err

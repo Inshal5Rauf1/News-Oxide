@@ -25,7 +25,7 @@ LOG="$DIR/cron.log"
 
 FETCH_TIMEOUT=200      # most fetches
 SLOW_TIMEOUT=400       # releases (~240 feeds), reddit (sleeps between subreddits)
-CURATE_TIMEOUT=1500    # curate stage, so a slow model cannot block the health alert
+CURATE_TIMEOUT=1500    # curate stage, so a slow model cannot block the health alert (curate.py budgets 1400)
 # Recipients live in config.env (untracked). See config.env.example.
 CONFIG="$DIR/config.env"; [ -f "$CONFIG" ] && . "$CONFIG"
 RECIPIENTS="${RECIPIENTS:?set RECIPIENTS in config.env}"; export RECIPIENTS HEALTH_TO FROM_ADDR
@@ -54,7 +54,7 @@ run(){ should "$1" || return 1; if [ -z "$ONLY" ] && topic_done "$1"; then log "
 commit_state(){ "$PY" "$DIR/fetch_sources.py" commit-state "$1" 2>>"$LOG" || { log "$1: commit-state FAILED"; : > "$TMP/$1.commitfail"; }; }
 # build_eml <subject> <html> <to> <eml> [attach]: removes any old eml first, so a failed build never sends a stale one.
 build_eml(){ rm -f "$4"; "$PY" "$DIR/render_email.py" eml "$@" && [ -s "$4" ]; }
-send(){ "$GWS" gmail users messages send --params '{"userId":"me"}' --upload "$1" --upload-content-type message/rfc822 >>"$LOG" 2>&1; }
+send(){ timeout 180 "$GWS" gmail users messages send --params '{"userId":"me"}' --upload "$1" --upload-content-type message/rfc822 >>"$LOG" 2>&1; }
 
 log(){ echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] $*" >> "$LOG"; }
 should(){ [ -z "$ONLY" ] || case ",$ONLY," in *",$1,"*) return 0;; *) return 1;; esac; }
@@ -142,10 +142,11 @@ process_curate(){
   timeout "$CURATE_TIMEOUT" "$PY" "$DIR/curate.py" "$TODAY" "$SENT" "$TMP" "${nm[@]}" >>"$LOG" 2>&1
   local rc=$?
   if [ "$rc" -eq 2 ] && [ -f "$cj" ]; then log "curate: invariant failure (exit 2), sending anyway"; status curate error
+  elif [ "$rc" -eq 124 ] && [ -f "$cj" ]; then log "curate: TIMED OUT, sending the titles-only fallback"; status curate error
   elif [ "$rc" -ne 0 ] || [ ! -f "$cj" ]; then log "curate: FAILED (exit $rc), no curated email"; status curate error; return; fi
-  local flags; flags=$("$PY" -c "import json,sys;s=json.load(open(sys.argv[1]))['stats'];print(s.get('items_in', 0), int(bool(s.get('grouped'))), {None:'skipped',True:'ok',False:'failed'}[s.get('probe_ok')])" "$cj" 2>>"$LOG") \
+  local flags; flags=$("$PY" -c "import json,sys;s=json.load(open(sys.argv[1]))['stats'];print(s.get('items_in', 0), int(bool(s.get('grouped'))), {None:'skipped',True:'ok',False:'failed'}[s.get('probe_ok')], 'skipped' if s.get('themes_skipped') else 'failed' if s.get('probe_ok') is True and not s.get('grouped') else 'ok')" "$cj" 2>>"$LOG") \
     || { log "curate: unreadable stats in $cj"; status curate error; return; }
-  local n grouped probe; read -r n grouped probe <<< "$flags"; status probe "$probe"
+  local n grouped probe themes; read -r n grouped probe themes <<< "$flags"; status probe "$probe"; status themes "$themes"
   if [ "$n" -eq 0 ]; then log "curate: nothing to curate (no source produced items), no curated email"; status curate empty; return; fi
   "$PY" "$DIR/render_email.py" curated "$cj" "$TODAY" "$body" "$full" \
     || { log "curate: render failed"; status curate error; return; }
@@ -202,6 +203,7 @@ for key in $TOPIC_KEYS; do
 done
 [ "$(cat "$TMP/curate.status" 2>/dev/null)" = error ] && BAD="$BAD curate(error)"
 [ "$(cat "$TMP/probe.status" 2>/dev/null)" = failed ] && BAD="$BAD probe(failed)"
+case "$(cat "$TMP/themes.status" 2>/dev/null)" in failed) BAD="$BAD themes(failed)";; skipped) BAD="$BAD themes(skipped)";; esac
 for f in "$TMP"/*.commitfail; do [ -e "$f" ] && k="${f##*/}" && BAD="$BAD ${k%.commitfail}(commit-failed)"; done
 [ -n "$BAD" ] && log "health: needs attention:$BAD"
 if [ "$DRYRUN" -eq 0 ] && [ -z "$ONLY" ] && [ -n "$BAD" ]; then

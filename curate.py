@@ -9,7 +9,7 @@ curate.py: the curate stage.
   run / main   write sent/<date>-curated.json
 Item: {id, sources, title, url, meta, hn_url, desc}. The model groups and summarises, never drops.
 """
-import sys, hashlib, json, os, urllib.parse
+import sys, hashlib, json, os, time, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
 import claude_cli
@@ -23,7 +23,11 @@ DROP_PARAMS = {"ref", "ref_src", "fbclid", "gclid"}
 
 
 def canonical_url(url):
-    p = urllib.parse.urlsplit((url or "").strip())
+    raw = (url or "").strip()
+    try:
+        p = urllib.parse.urlsplit(raw)
+    except ValueError:
+        return raw                     # unparseable (e.g. bad IPv6 bracket): the raw string is the key
     host = (p.hostname or "").lower()
     if host.startswith("www."):
         host = host[4:]
@@ -284,12 +288,38 @@ def placement_ok(out):
     return len(placed) == len(out["items"]) and set(placed) == set(out["items"])
 
 
-def run(date, sent_dir, tmp_dir, ask=claude_cli.ask, probe=claude_cli.probe, no_model=False):
+CURATE_BUDGET = 1400      # seconds; daily_brief.sh kills curate at CURATE_TIMEOUT=1500
+THEMES_RESERVE = 650      # themes worst case is 2 x 300 s; skip it when less than this is left
+
+
+def _write(path, out):
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=1)
+    os.replace(path + ".tmp", path)
+
+
+def _result_doc(date, day, items, r, probe_ok, themes_skipped):
+    placed = _placed(r)
+    return dict(date=date, items={it["id"]: it for it in items}, themes=r["themes"], rest=r["rest"],
+                stats=dict(items_in=len(items), items_placed=len(placed),
+                           sources=[k for k in KEYS if k in day], grouped=r["grouped"],
+                           probe_ok=probe_ok, themes_skipped=themes_skipped))
+
+
+def run(date, sent_dir, tmp_dir, ask=claude_cli.ask, probe=claude_cli.probe, no_model=False,
+        now=time.monotonic):
     """Load, gist, theme, enforce; write <sent_dir>/<date>-curated.json and return it."""
+    t0 = now()
+    deadline = t0 + CURATE_BUDGET
     os.makedirs(tmp_dir, exist_ok=True)
+    path = os.path.join(sent_dir, "%s-curated.json" % date)
     day = load_day(sent_dir, date)
     items = normalise(day)
-    probe_ok = None
+    plain = [dict(it, gist=it["title"], tags=[]) for it in items]
+    ungrouped = {"themes": [], "rest": [it["id"] for it in items], "grouped": False}
+    # Titles-only fallback first, so a hard kill during the model passes still leaves a sendable file.
+    _write(path, _result_doc(date, day, plain, enforce(plain, ungrouped), None, False))
+    probe_ok, themes_skipped = None, False
     if not no_model:
         try:
             probe_ok = bool(probe())
@@ -298,20 +328,16 @@ def run(date, sent_dir, tmp_dir, ask=claude_cli.ask, probe=claude_cli.probe, no_
             probe_ok = False
     if probe_ok:
         items = gists(items, ask)
-        result = themes(items, ask)
+        if deadline - now() < THEMES_RESERVE:
+            print("curate: themes skipped, out of time", file=sys.stderr)
+            themes_skipped = True
+            result = {"themes": [], "rest": [it["id"] for it in items], "grouped": False}
+        else:
+            result = themes(items, ask)
     else:
-        items = [dict(it, gist=it["title"], tags=[]) for it in items]
-        result = {"themes": [], "rest": [it["id"] for it in items], "grouped": False}
-    r = enforce(items, result)
-    placed = _placed(r)
-    out = dict(date=date, items={it["id"]: it for it in items}, themes=r["themes"], rest=r["rest"],
-               stats=dict(items_in=len(items), items_placed=len(placed),
-                          sources=[k for k in KEYS if k in day], grouped=r["grouped"],
-                          probe_ok=probe_ok))
-    path = os.path.join(sent_dir, "%s-curated.json" % date)
-    with open(path + ".tmp", "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=1)
-    os.replace(path + ".tmp", path)
+        items, result = plain, ungrouped
+    out = _result_doc(date, day, items, enforce(items, result), probe_ok, themes_skipped)
+    _write(path, out)
     return out
 
 

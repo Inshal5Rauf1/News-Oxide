@@ -144,3 +144,24 @@ def test_unplaced_item_falls_into_also_today():
     assert full.count(f'href="{orphan["url"]}"') == 1
     assert full.index("ALSO TODAY (1)") < full.index(orphan["url"])
     assert "TRENDING (1)" in full
+
+
+def test_curated_row_non_http_url_is_plain_text():
+    it = _item(1, url="javascript:alert(1)", hn="javascript:alert(2)", gist="Evil gist")
+    row = re_._curated_row(it)
+    assert "javascript:" not in row and "<a " not in row and "Evil gist" in row
+    ok = re_._curated_row(_item(2, url="https://example.com/x", hn="http://news.ycombinator.com/item?id=2"))
+    assert 'href="https://example.com/x"' in ok and 'href="http://news.ycombinator.com/item?id=2"' in ok
+
+
+def test_raw_renderers_do_not_link_non_http_urls():
+    bad = "javascript:alert(1)"
+    htmls = [
+        re_.render_hackernews([{"title": "t", "url": bad, "hn_url": bad, "points": 1, "comments": 2}], "2026-10-29"),
+        re_.render_trending({"daily": [{"full_name": "a/b", "url": bad, "rank": 1}]}, "2026-10-29"),
+        re_.render_huggingface({"models": [{"id": "m", "url": bad}], "papers": [{"title": "p", "url": bad}]},
+                               "2026-10-29"),
+        re_.render_releases([{"repo": "a/b", "url": bad, "tag": "v1"}], "2026-10-29"),
+    ]
+    for h in htmls:
+        assert "javascript:" not in h

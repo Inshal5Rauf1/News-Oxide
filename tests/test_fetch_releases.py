@@ -113,6 +113,17 @@ def test_releases_failed_repo_keeps_previous_ids(monkeypatch, tmp_path, capsys):
     assert _state(tmp_path)["bad/bad"] == ["p1", "p2"]
 
 
+def test_releases_starred_failure_keeps_unlisted_history(monkeypatch, tmp_path, capsys):
+    now = datetime.now(timezone.utc)
+    pages = {"a/a": _atom("a/a", [("v1", now)])}
+    _setup(monkeypatch, tmp_path, pages, ["a/a"], seen={"a/a": ["x"], "s/s": ["s1", "s2"]},
+           starred=RuntimeError("rate limited"))
+    fetch_sources.releases()
+    capsys.readouterr()
+    assert _state(tmp_path)["s/s"] == ["s1", "s2"]
+    assert _state(tmp_path)["a/a"] == ["tag:github.com,2008:Repository/1/v1"]
+
+
 def test_releases_corrupt_state_reseeds(monkeypatch, tmp_path, capsys):
     now = datetime.now(timezone.utc)
     for bad in ("{not json", "[1, 2]"):

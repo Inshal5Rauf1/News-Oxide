@@ -147,3 +147,11 @@ def test_load_day_missing_keys_skipped(tmp_path, capsys):
     day = curate.load_day(str(tmp_path), "2026-10-29")
     assert day == {"hackernews": []}
     assert "curate: feeds unreadable:" in capsys.readouterr().err
+
+
+def test_canonical_url_unparseable_kept_with_stable_id():
+    bad = "http://[::1/x"
+    assert curate.canonical_url(bad) == bad
+    assert curate.item_id(bad) == curate.item_id(bad)
+    items = curate.normalise({"feeds": [{"title": "odd", "url": bad, "feed": "f"}]})
+    assert len(items) == 1 and items[0]["url"] == bad and items[0]["id"] == curate.item_id(bad)

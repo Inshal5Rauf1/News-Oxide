@@ -188,8 +188,10 @@ def newrepos():
             out.append({"full_name": r.get("full_name"), "url": r.get("html_url"),
                         "description": r.get("description") or "", "language": r.get("language") or "",
                         "stars": r.get("stargazers_count"), "created_at": r.get("created_at")})
-    except Exception:
-        out = []   # empty on failure so the section is skipped, not sent as an empty list
+    except Exception as e:
+        print(f"newrepos: fetch failed: {' '.join(str(e).split())}", file=sys.stderr)
+        print("[]")
+        raise SystemExit(3)
     print(json.dumps(out))
 
 
@@ -201,8 +203,10 @@ def hnbest():
         hits = json.loads(get(url)).get("hits", [])
         hits.sort(key=lambda h: h.get("points") or 0, reverse=True)
         out = [_hn_row(h) for h in hits]
-    except Exception:
-        out = []
+    except Exception as e:
+        print(f"hnbest: fetch failed: {' '.join(str(e).split())}", file=sys.stderr)
+        print("[]")
+        raise SystemExit(3)
     print(json.dumps(out))
 
 
@@ -363,7 +367,7 @@ def releases():
         results = list(pool.map(fetch, repos))     # map keeps the sorted repo order
 
     epoch = datetime.min.replace(tzinfo=timezone.utc)
-    out, state, failed = [], {}, 0
+    out, state, failed = [], dict(seen), 0     # repos absent this run (starred fetch failed) keep history
     for repo, items in zip(repos, results):
         if items is None:
             failed += 1

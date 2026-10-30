@@ -15,7 +15,7 @@ setup(){
   W="$(mktemp -d)"; WS="$WS $W"; cp "$REPO/daily_brief.sh" "$W/"; cp "$HERE"/orchestrator_stubs/*.py "$W/"
   printf 'RECIPIENTS=a@example.org\nHEALTH_TO=h@example.org\nFROM_ADDR=f@example.org\n' > "$W/config.env"
   export GWS="$HERE/orchestrator_stubs/gws" GWS_LOG="$W/gws.log"; : > "$GWS_LOG"
-  unset FAIL_KEYS GARBAGE_KEYS COMMIT_FAIL CURATE_EXIT CURATE_DEGRADED RELEASES_ITEMS RENDER_FAIL GWS_FAIL
+  unset FAIL_KEYS GARBAGE_KEYS COMMIT_FAIL CURATE_EXIT CURATE_DEGRADED CURATE_THEMES RELEASES_ITEMS RENDER_FAIL GWS_FAIL
 }
 G(){ echo "$W/guard/$D"; }
 
@@ -72,6 +72,7 @@ bash "$W/daily_brief.sh"
 check "curated subject says ungrouped" 'grep "· Curated ·" "$GWS_LOG" | grep -q "· ungrouped"'
 check "health names probe(failed)" 'grep -q "probe(failed)" "$W/tmp/health.html"'
 check "curate itself not flagged" '! grep -q "curate(error)" "$W/tmp/health.html"'
+check "probe failure is not themes(failed)" '! grep -q "themes(" "$W/tmp/health.html"'
 
 echo "## scenario 6: curated render fails"
 setup; export RENDER_FAIL=curated
@@ -121,6 +122,23 @@ check "dry-run writes no .done" '[ -z "$(ls "$(G)" 2>/dev/null)" ]'
 check "dry-run commits no state" '[ -z "$(ls "$W"/tmp/committed-* 2>/dev/null)" ]'
 check "dry-run curate --no-model" 'grep -q "\"no_model\": true" "$W/sent/$D-curated.json"'
 check "dry-run renders curated" '[ -f "$W/sent/$D-curated.html" ] && [ -f "$W/sent/$D-curated-body.html" ]'
+
+echo "## scenario 12: themes pass failed / skipped, curate timed out"
+setup; export CURATE_THEMES=failed
+bash "$W/daily_brief.sh"
+check "themes failed: ungrouped subject" 'grep "· Curated ·" "$GWS_LOG" | grep -q "· ungrouped"'
+check "health names themes(failed), not probe" 'grep -q "themes(failed)" "$W/tmp/health.html" && ! grep -q "probe(failed)" "$W/tmp/health.html"'
+setup; export CURATE_THEMES=skipped
+bash "$W/daily_brief.sh"
+check "themes skipped: health names themes(skipped)" 'grep -q "themes(skipped)" "$W/tmp/health.html" && ! grep -q "themes(failed)" "$W/tmp/health.html"'
+check "themes skipped: curated still sent" '[ "$(count "· Curated ·")" = 1 ] && [ -f "$(G)/curate.done" ]'
+setup
+bash "$W/daily_brief.sh"
+check "grouped day: no themes flag" '[ ! -f "$W/tmp/health.html" ] || ! grep -q "themes(" "$W/tmp/health.html"'
+setup; export CURATE_EXIT=124 CURATE_DEGRADED=1
+bash "$W/daily_brief.sh"
+check "curate timeout: fallback still sent" '[ "$(count "· Curated ·")" = 1 ] && grep -q "curate: TIMED OUT" "$W/cron.log"'
+check "curate timeout: health names curate(error)" 'grep -q "curate(error)" "$W/tmp/health.html"'
 
 echo "## result: $FAILS failure(s)"
 [ "$FAILS" -eq 0 ]
